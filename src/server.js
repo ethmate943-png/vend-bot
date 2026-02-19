@@ -71,8 +71,8 @@ app.get('/qr', async (req, res) => {
 });
 
 // Payment callback: Paystack redirects the buyer's browser here after they pay.
-// We verify, then redirect to WhatsApp chat. Receipt is sent by the WEBHOOK (server-to-server), not here.
-app.get('/payment/callback', async (req, res) => {
+// Handle both /payment/callback and /payment/callback/ (trailing slash) so redirect always works.
+async function paymentCallback(req, res) {
   const { reference, vendor } = req.query;
   console.log('[CALLBACK] GET /payment/callback', { reference: reference ? 'yes' : 'no', vendor: vendor ? 'yes' : 'no' });
 
@@ -111,6 +111,23 @@ app.get('/payment/callback', async (req, res) => {
     <p>Go back to WhatsApp to see your confirmation.</p>
     </div></body></html>
   `);
+}
+
+app.get('/payment/callback', paymentCallback);
+// With trailing slash: redirect to canonical URL so route always matches
+app.get('/payment/callback/', (req, res) => {
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(302, '/payment/callback' + qs);
+});
+
+// Wrong callback URL (if APP_URL was set with /webhook/paystack): redirect to correct path
+app.get('/webhook/paystack/payment/callback', (req, res) => {
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(302, '/payment/callback' + qs);
+});
+app.get('/webhook/paystack/payment/callback/', (req, res) => {
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(302, '/payment/callback' + qs);
 });
 
 // Webhook: Paystack calls this when a payment succeeds (server-to-server).

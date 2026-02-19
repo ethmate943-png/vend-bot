@@ -5,8 +5,16 @@ const { query } = require('../db');
 async function generatePaymentLink({ amount, itemName, itemSku, buyerJid, vendorId, vendorPhone }) {
   const reference = `VBOT-${uuidv4().slice(0, 8).toUpperCase()}`;
   const buyerPhone = buyerJid.replace('@s.whatsapp.net', '').replace(/[^0-9]/g, '');
-  const baseUrl = (process.env.APP_URL || '').replace(/\/$/, '');
-  const callbackUrl = `${baseUrl}/payment/callback?vendor=${encodeURIComponent(String(vendorPhone).replace(/\D/g, ''))}`;
+
+  // Callback URL = where the buyer's browser goes after payment. Must be /payment/callback on your app root.
+  // (Webhook URL in Paystack Dashboard is separate: that's /webhook/paystack for Paystack's server.)
+  let callbackBase = (process.env.APP_URL || '').trim().replace(/\/$/, '');
+  try {
+    callbackBase = new URL(callbackBase).origin; // use only origin so no path (e.g. /webhook/paystack) is ever used
+  } catch (_) {
+    // if APP_URL is invalid, leave as-is
+  }
+  const callbackUrl = `${callbackBase}/payment/callback?vendor=${encodeURIComponent(String(vendorPhone).replace(/\D/g, ''))}`;
 
   const res = await axios.post(
     'https://api.paystack.co/transaction/initialize',
