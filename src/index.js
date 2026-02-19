@@ -1,6 +1,7 @@
 require('dotenv').config();
-const { startBot, setMessageHandler } = require('./whatsapp/client');
+const { startBot, setMessageHandler, setOnConnected } = require('./whatsapp/client');
 const { handleMessage } = require('./whatsapp/listener');
+const { getTryPendingReceipts } = require('./payments/webhook');
 const { startCronJobs } = require('./cron');
 const app = require('./server');
 
@@ -13,6 +14,7 @@ async function main() {
   });
 
   setMessageHandler(handleMessage);
+  setOnConnected(() => getTryPendingReceipts()());
   await startBot();
 
   startCronJobs();

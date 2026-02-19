@@ -6,6 +6,95 @@ function getSock() {
   return require('../whatsapp/client').getSock();
 }
 
+// When WhatsApp is disconnected at payment time, queue receipt and send when sock is back
+const pendingReceipts = [];
+let pendingReceiptsInterval = null;
+
+function startPendingReceiptsPolling() {
+  if (pendingReceiptsInterval) return;
+  pendingReceiptsInterval = setInterval(tryPendingReceipts, 15000);
+}
+
+async function tryPendingReceipts() {
+  const sock = getSock();
+  if (!sock || pendingReceipts.length === 0) return;
+  const toSend = pendingReceipts.splice(0, pendingReceipts.length);
+  for (const ref of toSend) {
+    console.log('[PAYMENT] Retrying receipt for ref (WhatsApp now connected):', ref.reference);
+    try {
+      await sendReceiptForReference(sock, ref.reference, ref.receiptNumber);
+    } catch (err) {
+      console.error('[PAYMENT] Pending receipt send failed:', err.message);
+      pendingReceipts.push(ref);
+    }
+  }
+}
+
+function getTryPendingReceipts() {
+  return tryPendingReceipts;
+}
+
+async function sendReceiptForReference(sock, reference, receiptNumber) {
+  const txnRes = await query(
+    `SELECT t.*, v.whatsapp_number, v.business_name, v.total_transactions
+     FROM transactions t JOIN vendors v ON v.id = t.vendor_id
+     WHERE t.mono_ref = $1 LIMIT 1`,
+    [reference]
+  );
+  const rows = txnRes.rows || (Array.isArray(txnRes) ? txnRes : []);
+  const txn = rows[0];
+  if (!txn) return;
+
+  const isEstablished = txn.total_transactions >= Number(process.env.ESTABLISHED_VENDOR_MIN_TRANSACTIONS);
+  const holdHours = isEstablished
+    ? Number(process.env.ESCROW_HOLD_ESTABLISHED_HOURS)
+    : Number(process.env.ESCROW_HOLD_NEW_VENDOR_HOURS);
+  const amountFormatted = `₦${(txn.amount / 100).toLocaleString()}`;
+  const date = new Date().toLocaleDateString('en-NG', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+  const receiptLink = receiptNumber
+    ? `\n🔗 View receipt: https://paystack.com/receipt/${receiptNumber}\n`
+    : '';
+  const receiptText =
+    `✅ *PAYMENT RECEIPT*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `🏪 *${txn.business_name}*\n\n` +
+    `📦 Item: *${txn.item_name}*\n` +
+    `💰 Amount: *${amountFormatted}*\n` +
+    `🧾 Ref: \`${reference}\`\n` +
+    `📅 Date: ${date}\n` +
+    receiptLink +
+    `\n━━━━━━━━━━━━━━━━━━━━\n` +
+    `Your payment has been received and your order is confirmed.\n\n` +
+    `*${txn.business_name}* will contact you to arrange delivery.\n\n` +
+    `_Your funds are held in escrow for ${holdHours} hours for your protection. ` +
+    `If anything goes wrong, contact wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER}_`;
+
+  try {
+    await sendWithDelay(sock, txn.buyer_jid, receiptText);
+    console.log('[PAYMENT] Receipt sent to buyer (retry)', txn.buyer_jid);
+  } catch (err) {
+    const fallbackJid = `${String(txn.buyer_phone).replace(/\D/g, '')}@s.whatsapp.net`;
+    await sendWithDelay(sock, fallbackJid, receiptText);
+    console.log('[PAYMENT] Receipt sent to buyer (retry fallback)', fallbackJid);
+  }
+  await sendWithDelay(sock, `${txn.whatsapp_number}@s.whatsapp.net`,
+    `🛍️ *NEW SALE!*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `📦 Item: *${txn.item_name}*\n` +
+    `💰 Amount: *${amountFormatted}*\n` +
+    `👤 Buyer: ${txn.buyer_phone}\n` +
+    `🧾 Ref: \`${reference}\`\n` +
+    `📅 Date: ${date}\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `Please arrange delivery for the buyer.\n\n` +
+    `💸 Payout: *${holdHours} hours* after delivery is confirmed.\n` +
+    `_Inventory has been auto-updated on your sheet._`
+  );
+}
+
 async function handlePaymentSuccess(data) {
   const { reference, receiptNumber } = data;
   const sock = getSock();
@@ -19,9 +108,21 @@ async function handlePaymentSuccess(data) {
     [reference]
   );
 
-  const txn = txnRes.rows[0];
-  if (!txn) { console.error('[WEBHOOK] Transaction not found:', reference); return; }
-  if (txn.status === 'paid') { console.log('[WEBHOOK] Already processed:', reference); return; }
+  const rows = txnRes.rows || (Array.isArray(txnRes) ? txnRes : []);
+  const txn = rows[0];
+  if (!txn) {
+    console.error('[PAYMENT] Transaction not found for reference:', reference, '(check mono_ref in DB)');
+    return;
+  }
+  console.log('[PAYMENT] Found txn:', txn.id, 'buyer_jid:', txn.buyer_jid, 'buyer_phone:', txn.buyer_phone);
+  if (txn.status === 'paid') {
+    console.log('[PAYMENT] Already processed:', reference);
+    return;
+  }
+
+  if (!sock) {
+    console.error('[PAYMENT] Cannot send receipt: WhatsApp not connected (sock is null). Receipt not sent for ref:', reference);
+  }
 
   const isEstablished = txn.total_transactions >= Number(process.env.ESTABLISHED_VENDOR_MIN_TRANSACTIONS);
   const holdHours = isEstablished
@@ -53,12 +154,12 @@ async function handlePaymentSuccess(data) {
   });
 
   if (sock) {
+    console.log('[PAYMENT] Sending receipt to buyer', txn.buyer_jid, 'and vendor', txn.whatsapp_number);
     const receiptLink = receiptNumber
       ? `\n🔗 View receipt: https://paystack.com/receipt/${receiptNumber}\n`
       : '';
 
-    // Receipt to buyer
-    await sendWithDelay(sock, txn.buyer_jid,
+    const receiptText =
       `✅ *PAYMENT RECEIPT*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n\n` +
       `🏪 *${txn.business_name}*\n\n` +
@@ -71,11 +172,26 @@ async function handlePaymentSuccess(data) {
       `Your payment has been received and your order is confirmed.\n\n` +
       `*${txn.business_name}* will contact you to arrange delivery.\n\n` +
       `_Your funds are held in escrow for ${holdHours} hours for your protection. ` +
-      `If anything goes wrong, contact wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER}_`
-    );
+      `If anything goes wrong, contact wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER}_`;
 
-    // Notification to vendor
-    await sendWithDelay(sock, `${txn.whatsapp_number}@s.whatsapp.net`,
+    try {
+      await sendWithDelay(sock, txn.buyer_jid, receiptText);
+      console.log('[PAYMENT] Receipt sent to buyer', txn.buyer_jid);
+    } catch (err) {
+      console.error('[PAYMENT] Failed to send receipt to buyer_jid:', err.message);
+      const fallbackJid = `${String(txn.buyer_phone).replace(/\D/g, '')}@s.whatsapp.net`;
+      if (fallbackJid !== txn.buyer_jid) {
+        try {
+          await sendWithDelay(sock, fallbackJid, receiptText);
+          console.log('[PAYMENT] Receipt sent to buyer (fallback)', fallbackJid);
+        } catch (err2) {
+          console.error('[PAYMENT] Fallback send also failed:', err2.message);
+        }
+      }
+    }
+
+    try {
+      await sendWithDelay(sock, `${txn.whatsapp_number}@s.whatsapp.net`,
       `🛍️ *NEW SALE!*\n` +
       `━━━━━━━━━━━━━━━━━━━━\n\n` +
       `📦 Item: *${txn.item_name}*\n` +
@@ -87,7 +203,10 @@ async function handlePaymentSuccess(data) {
       `Please arrange delivery for the buyer.\n\n` +
       `💸 Payout: *${holdHours} hours* after delivery is confirmed.\n` +
       `_Inventory has been auto-updated on your sheet._`
-    );
+      );
+    } catch (err) {
+      console.error('[PAYMENT] Failed to send vendor notification:', err.message);
+    }
 
     // Delivery check after 3 hours
     setTimeout(async () => {
@@ -99,6 +218,10 @@ async function handlePaymentSuccess(data) {
         console.error('[DELIVERY PING ERROR]', err.message);
       }
     }, 3 * 60 * 60 * 1000);
+  } else {
+    console.error('[PAYMENT] WhatsApp not connected — queuing receipt for ref:', reference);
+    pendingReceipts.push({ reference, receiptNumber });
+    startPendingReceiptsPolling();
   }
 }
 
@@ -132,4 +255,4 @@ async function handleDeliveryReply(buyerJid, vendorId, reply) {
   }
 }
 
-module.exports = { handlePaymentSuccess, handleDeliveryReply };
+module.exports = { handlePaymentSuccess, handleDeliveryReply, getTryPendingReceipts };

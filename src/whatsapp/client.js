@@ -10,6 +10,7 @@ const { setQR, setConnected } = require('./qr-store');
 
 let sock = null;
 let messageHandler = null;
+let onConnectedCallback = null;
 let retryCount = 0;
 let connectedAt = 0;
 const MAX_RETRIES = 5;
@@ -53,6 +54,10 @@ const baileysLogger = {
 
 function setMessageHandler(handler) {
   messageHandler = handler;
+}
+
+function setOnConnected(cb) {
+  onConnectedCallback = cb;
 }
 
 async function startBot() {
@@ -116,6 +121,9 @@ async function startBot() {
       connectedAt = Math.floor(Date.now() / 1000);
       setConnected(true);
       console.log('[WA] WhatsApp connected successfully (timestamp:', connectedAt + ')');
+      if (onConnectedCallback) {
+        try { onConnectedCallback(); } catch (e) { console.error('[WA] onConnected callback error:', e.message); }
+      }
     }
   });
 
@@ -161,4 +169,4 @@ async function startBot() {
 
 function getSock() { return sock; }
 
-module.exports = { startBot, getSock, setMessageHandler };
+module.exports = { startBot, getSock, setMessageHandler, setOnConnected };

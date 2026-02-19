@@ -73,24 +73,26 @@ app.get('/qr', async (req, res) => {
 // Payment callback: Paystack redirects the buyer's browser here after they pay.
 // Handle both /payment/callback and /payment/callback/ (trailing slash) so redirect always works.
 async function paymentCallback(req, res) {
-  const { reference, vendor } = req.query;
-  console.log('[CALLBACK] GET /payment/callback', { reference: reference ? 'yes' : 'no', vendor: vendor ? 'yes' : 'no' });
+  const ref = req.query.reference || req.query.trxref;
+  const { vendor } = req.query;
+  console.log('[CALLBACK] GET /payment/callback', { reference: ref || 'none', vendor: vendor ? 'yes' : 'no', queryKeys: Object.keys(req.query) });
 
   try {
-    if (reference) {
-      const txn = await verifyTransaction(reference);
+    if (ref) {
+      const txn = await verifyTransaction(ref);
       if (txn.status === 'success') {
-        console.log(`[CALLBACK] Payment verified for ref ${reference}`);
-        handlePaymentSuccess({
-          reference,
-          receiptNumber: txn.receipt_number
-        }).catch(err =>
-          console.error('[CALLBACK] handlePaymentSuccess error:', err.message)
-        );
+        console.log(`[CALLBACK] Payment verified for ref ${ref}, sending receipt...`);
+        const receiptNumber = txn.receipt_number || txn.receipt || null;
+        await handlePaymentSuccess({ reference: ref, receiptNumber });
+        console.log('[CALLBACK] Receipt sent.');
+      } else {
+        console.warn('[CALLBACK] Verify status not success:', txn.status);
       }
+    } else {
+      console.warn('[CALLBACK] No reference or trxref in query');
     }
   } catch (err) {
-    console.error('[CALLBACK] Verify error:', err.message);
+    console.error('[CALLBACK] Error:', err.message);
   }
 
   if (vendor) {
