@@ -72,6 +72,10 @@ In the Koyeb service → **Settings** → **Environment variables**, add the sam
 
    Replace `vendbot-XXXXX.koyeb.app` with your real Koyeb domain. This is the **stable URL** Paystack will call when a payment succeeds.
 
+**Callback vs webhook**
+- **Webhook** (`/webhook/paystack`): Paystack’s servers POST here when a payment succeeds. The app uses this to send the receipt and notify the vendor. You’ll see `🔔 PAYSTACK WEBHOOK HIT!` in Koyeb logs when it works.
+- **Callback** (`/payment/callback`): The buyer’s browser is redirected here after they pay. The app then redirects them to WhatsApp. Make sure **APP_URL** is exactly your Koyeb URL (no trailing slash), e.g. `https://nutritious-buffy-ethname-5769528f.koyeb.app`, so Paystack redirects to the right place.
+
 ---
 
 ## 5. Persistent storage (WhatsApp session)
@@ -86,11 +90,14 @@ So the bot stays logged in across restarts:
 
 ---
 
-## 6. First run and QR login
+## 6. First run and QR login (phone-friendly)
 
-1. Deploy the service. After the first deploy, open **Logs**.
-2. The app will start and show a **QR code** in the logs. Scan it with WhatsApp (same number you use for the vendor).
-3. After scanning, the session is stored in the `/data` volume, so the next restarts won’t ask for QR again (unless you’re logged out).
+1. Deploy the service.
+2. **On your phone (or any device):** open **`https://YOUR_KOYEB_DOMAIN.koyeb.app/qr`** in the browser.
+3. You’ll see the WhatsApp QR code on the page. On your phone: open **WhatsApp → Settings → Linked devices → Link a device**, then scan the QR on the screen.
+4. After scanning, the page will show “WhatsApp connected” and the session is stored in the `/data` volume. Next restarts won’t ask for QR again (unless you’re logged out).
+
+Optional: set **QR_SECRET** in env and use **`/qr?key=YOUR_SECRET`** so only people with the secret can see the QR page.
 
 ---
 

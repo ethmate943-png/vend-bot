@@ -4,8 +4,9 @@ const {
   DisconnectReason
 } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
-const qrcode = require('qrcode-terminal');
+const qrcodeTerminal = require('qrcode-terminal');
 const fs = require('fs');
+const { setQR, setConnected } = require('./qr-store');
 
 let sock = null;
 let messageHandler = null;
@@ -73,11 +74,16 @@ async function startBot() {
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      console.log('\n[WA] Scan this QR code with WhatsApp:\n');
-      qrcode.generate(qr, { small: true });
+      setQR(qr);
+      // Terminal QR: kept in all environments (dev + prod) so you can test from the logs
+      console.log('\n[WA] Scan this QR in terminal below, or open /qr on this server:\n');
+      qrcodeTerminal.generate(qr, { small: true });
     }
 
     if (connection === 'close') {
+      setConnected(false);
+      setQR(null);
+
       const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
 
       if (code === DisconnectReason.loggedOut) {
@@ -108,6 +114,7 @@ async function startBot() {
     } else if (connection === 'open') {
       retryCount = 0;
       connectedAt = Math.floor(Date.now() / 1000);
+      setConnected(true);
       console.log('[WA] WhatsApp connected successfully (timestamp:', connectedAt + ')');
     }
   });

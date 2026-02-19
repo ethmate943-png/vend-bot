@@ -5,8 +5,8 @@ const { query } = require('../db');
 async function generatePaymentLink({ amount, itemName, itemSku, buyerJid, vendorId, vendorPhone }) {
   const reference = `VBOT-${uuidv4().slice(0, 8).toUpperCase()}`;
   const buyerPhone = buyerJid.replace('@s.whatsapp.net', '').replace(/[^0-9]/g, '');
-
-  const callbackUrl = `${process.env.APP_URL}/payment/callback?vendor=${vendorPhone}`;
+  const baseUrl = (process.env.APP_URL || '').replace(/\/$/, '');
+  const callbackUrl = `${baseUrl}/payment/callback?vendor=${encodeURIComponent(String(vendorPhone).replace(/\D/g, ''))}`;
 
   const res = await axios.post(
     'https://api.paystack.co/transaction/initialize',
