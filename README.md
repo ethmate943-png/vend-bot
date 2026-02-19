@@ -45,7 +45,9 @@ vendbot/
 │   └── index.js      # Entry point
 ├── migrate.js        # Database migration script
 ├── register_vendor.js # Vendor registration helper
-├── render.yaml       # Render deployment config
+├── Dockerfile        # Docker build for deployment
+├── koyeb.yaml        # Koyeb app reference (port, volume, health check)
+├── KOYEB.md          # Deploy to Koyeb (stable webhook URL)
 └── .env.example      # Environment variable template
 ```
 
@@ -79,6 +81,9 @@ vendbot/
    npm run dev
    ```
    Scan the QR code with WhatsApp to connect.
+
+6. **Deploy to Koyeb (optional, for a stable webhook URL)**  
+   Push the repo to GitHub, then follow **[KOYEB.md](KOYEB.md)** to create a Koyeb service (Dockerfile build), set env vars from `.env.example`, add a `/data` volume, and set your Paystack webhook to `https://YOUR_APP.koyeb.app/webhook/paystack`.
 
 ## Environment Variables
 

@@ -1,0 +1,30 @@
+# Koyeb app definition for VendBot
+# Reference only: create the service in the Koyeb dashboard (GitHub + Dockerfile), then
+# match these settings: port 3000, volume /data, health check /health, env from .env.example.
+# Webhook URL after deploy: https://YOUR_SERVICE.koyeb.app/webhook/paystack
+
+name: vendbot
+
+services:
+  - name: vendbot
+    # Build from repo root using Dockerfile
+    build:
+      dockerfile: Dockerfile
+    # Web service: listen on PORT (Koyeb sets PORT automatically)
+    ports:
+      - port: 3000
+        protocol: http
+    # Persistent volume for WhatsApp session (auth_info_baileys)
+    # In Koyeb dashboard: Volumes → Add → Path: /data, Size: 1 GB
+    volumes:
+      - path: /data
+        size: 1GB
+    # Health check so Koyeb knows the app is up
+    health_checks:
+      - name: http
+        path: /health
+        port: 3000
+        protocol: http
+        interval: 30s
+    # Env: set all variables from .env.example in Koyeb → Settings → Environment variables
+    # Required: NODE_ENV=production, APP_URL=https://YOUR_APP.koyeb.app, and the rest from .env

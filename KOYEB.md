@@ -2,6 +2,8 @@
 
 Deploy to Koyeb so Paystack (and payment callbacks) use a **fixed URL** instead of ngrok.
 
+**Repo is Koyeb-ready:** `Dockerfile`, `koyeb.yaml` (reference), and `.env.example` (env template). Follow the steps below.
+
 ---
 
 ## 1. Push your code to GitHub
@@ -23,6 +25,8 @@ git push -u origin main
 4. **Builder**: choose **Dockerfile** (Koyeb will use the repo’s `Dockerfile`).
 5. **Service name**: e.g. `vendbot`.
 6. **Region**: pick one close to you (e.g. Frankfurt, Washington).
+
+Optional: the repo includes **`koyeb.yaml`** as a reference for service name, port, health check, and volume path. If your Koyeb CLI or dashboard supports importing it, you can use it; otherwise configure the same in the UI (see below).
 
 ---
 
