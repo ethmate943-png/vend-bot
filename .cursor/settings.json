@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "neon-postgres": {
+      "enabled": true
+    },
+    "continual-learning": {
+      "enabled": true
+    }
+  }
+}

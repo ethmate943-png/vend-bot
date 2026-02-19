@@ -1,0 +1,5 @@
+{
+  "watch": ["src"],
+  "ignore": ["auth_info_baileys/**", "node_modules/**", "*.txt", "*.csv"],
+  "ext": "js"
+}

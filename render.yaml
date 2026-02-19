@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: vendbot
+    env: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install
+    startCommand: node src/index.js
+    healthCheckPath: /health
+    disk:
+      name: auth-storage
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: GROQ_MODEL_SMART
+        value: llama-3.3-70b-versatile
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_PUBLIC_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        sync: false
+      - key: GOOGLE_PRIVATE_KEY
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: PAYMENT_LINK_EXPIRY_MINUTES
+        value: '30'
+      - key: ESCROW_HOLD_NEW_VENDOR_HOURS
+        value: '72'
+      - key: ESCROW_HOLD_ESTABLISHED_HOURS
+        value: '24'
+      - key: ESTABLISHED_VENDOR_MIN_TRANSACTIONS
+        value: '20'
+      - key: VELOCITY_MAX_DAILY_MULTIPLIER
+        value: '10'
+      - key: DISPUTE_WHATSAPP_NUMBER
+        sync: false
