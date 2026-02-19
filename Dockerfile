@@ -1,12 +1,13 @@
 # VendBot — Koyeb (or any Docker) deployment
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
 # Install dependencies (production only for smaller image)
 COPY package.json package-lock.json* ./
 COPY patches ./patches
-RUN npm install --omit=dev
+ENV NODE_ENV=production
+RUN /usr/local/bin/npm install --omit=dev
 
 # App code
 COPY src ./src
