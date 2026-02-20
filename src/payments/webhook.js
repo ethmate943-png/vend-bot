@@ -54,9 +54,13 @@ async function sendReceiptForReference(sock, reference, receiptNumber) {
     year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit'
   });
+  let baseUrl = (process.env.CALLBACK_BASE_URL || process.env.APP_URL || '').trim();
+  try { baseUrl = new URL(baseUrl).origin; } catch (_) { baseUrl = ''; }
+  const visualReceiptUrl = baseUrl ? `${baseUrl}/receipt/${encodeURIComponent(reference)}` : '';
   const receiptLink = receiptNumber
-    ? `\n🔗 View receipt: https://paystack.com/receipt/${receiptNumber}\n`
+    ? `\n🔗 Paystack receipt: https://paystack.com/receipt/${receiptNumber}\n`
     : '';
+  const visualReceiptLine = visualReceiptUrl ? `\n📄 View & download your receipt: ${visualReceiptUrl}\n` : '';
   const receiptText =
     `✅ *PAYMENT RECEIPT*\n` +
     `━━━━━━━━━━━━━━━━━━━━\n\n` +
@@ -66,6 +70,7 @@ async function sendReceiptForReference(sock, reference, receiptNumber) {
     `🧾 Ref: \`${reference}\`\n` +
     `📅 Date: ${date}\n` +
     receiptLink +
+    visualReceiptLine +
     `\n━━━━━━━━━━━━━━━━━━━━\n` +
     `Your payment has been received and your order is confirmed.\n\n` +
     `*${txn.business_name}* will contact you to arrange delivery.\n\n` +
@@ -155,8 +160,15 @@ async function handlePaymentSuccess(data) {
 
   if (sock) {
     console.log('[PAYMENT] Sending receipt to buyer', txn.buyer_jid, 'and vendor', txn.whatsapp_number);
+    let baseUrl = (process.env.CALLBACK_BASE_URL || process.env.APP_URL || '').trim();
+    try { baseUrl = new URL(baseUrl).origin; } catch (_) { baseUrl = ''; }
+    const visualReceiptUrl = baseUrl ? `${baseUrl}/receipt/${encodeURIComponent(reference)}` : '';
+
     const receiptLink = receiptNumber
-      ? `\n🔗 View receipt: https://paystack.com/receipt/${receiptNumber}\n`
+      ? `\n🔗 Paystack receipt: https://paystack.com/receipt/${receiptNumber}\n`
+      : '';
+    const visualReceiptLine = visualReceiptUrl
+      ? `\n📄 View & download your receipt: ${visualReceiptUrl}\n`
       : '';
 
     const receiptText =
@@ -168,6 +180,7 @@ async function handlePaymentSuccess(data) {
       `🧾 Ref: \`${reference}\`\n` +
       `📅 Date: ${date}\n` +
       receiptLink +
+      visualReceiptLine +
       `\n━━━━━━━━━━━━━━━━━━━━\n` +
       `Your payment has been received and your order is confirmed.\n\n` +
       `*${txn.business_name}* will contact you to arrange delivery.\n\n` +

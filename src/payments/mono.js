@@ -6,13 +6,15 @@ async function generatePaymentLink({ amount, itemName, itemSku, buyerJid, vendor
   const reference = `VBOT-${uuidv4().slice(0, 8).toUpperCase()}`;
   const buyerPhone = buyerJid.replace('@s.whatsapp.net', '').replace(/[^0-9]/g, '');
 
-  // Callback URL = where the buyer's browser goes after payment. Must be /payment/callback on your app root.
-  // (Webhook URL in Paystack Dashboard is separate: that's /webhook/paystack for Paystack's server.)
-  let callbackBase = (process.env.APP_URL || '').trim().replace(/\/$/, '');
+  // Callback URL = where the buyer's browser goes after payment. That server must have WhatsApp connected to send the receipt.
+  // - Local testing: set CALLBACK_BASE_URL to your ngrok URL so the callback hits your machine and your local WhatsApp sends the receipt.
+  // - Koyeb: leave CALLBACK_BASE_URL unset and set APP_URL to Koyeb; connect WhatsApp on Koyeb (/qr) so Koyeb can send receipts.
+  let callbackBase = (process.env.CALLBACK_BASE_URL || process.env.APP_URL || '').trim().replace(/\/$/, '');
   try {
-    callbackBase = new URL(callbackBase).origin; // use only origin so no path (e.g. /webhook/paystack) is ever used
-  } catch (_) {
-    // if APP_URL is invalid, leave as-is
+    callbackBase = new URL(callbackBase).origin;
+  } catch (_) {}
+  if (!callbackBase) {
+    throw new Error('CALLBACK_BASE_URL or APP_URL must be set for payment callback');
   }
   const callbackUrl = `${callbackBase}/payment/callback?vendor=${encodeURIComponent(String(vendorPhone).replace(/\D/g, ''))}`;
 

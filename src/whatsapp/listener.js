@@ -4,7 +4,7 @@ const { getInventory } = require('../inventory/sheets');
 const { getVendorByBotNumber } = require('../vendors/resolver');
 const { getSession, upsertSession, getChatHistory, appendMessage } = require('../sessions/manager');
 const { generatePaymentLink } = require('../payments/mono');
-const { sendMessage, sendWithDelay, sendButtons } = require('./sender');
+const { sendMessage, sendWithDelay, sendButtons, sendListMessage } = require('./sender');
 const { handleDeliveryReply } = require('../payments/webhook');
 const { checkVelocity } = require('../safety/velocity');
 
@@ -103,11 +103,16 @@ async function handleMessage(sock, msg) {
   // Only respond to direct 1-on-1 messages
   if (!buyerJid.endsWith('@s.whatsapp.net') && !buyerJid.endsWith('@lid')) return;
 
-  const text = (
+  // Normal text or list/button response (native interactive)
+  let text = (
     msg.message.conversation ||
     msg.message.extendedTextMessage?.text ||
     ''
   ).trim();
+  const listReply = msg.message.listResponseMessage?.singleSelectReply?.selectedRowId;
+  const buttonReply = msg.message.buttonsResponseMessage?.selectedButtonId;
+  if (listReply) text = listReply;
+  else if (buttonReply) text = buttonReply;
   if (!text) return;
 
   const botNumber = sock.user.id.split(':')[0];
@@ -223,8 +228,13 @@ async function handleMessage(sock, msg) {
     }
   }
 
-  // Handle numbered selection (buyer replied "1", "2", etc.)
+  // Handle selection: number, list row id (sku), or product name match
   if (session.intent_state === 'selecting_item') {
+    const bySku = inventory.find((i) => i.sku === text.trim());
+    if (bySku) {
+      await handlePurchase(sock, buyerJid, vendor, session, bySku);
+      return;
+    }
     const num = parseInt(text.trim(), 10);
     if (num >= 1 && num <= inventory.length) {
       const item = inventory[num - 1];
@@ -236,7 +246,7 @@ async function handleMessage(sock, msg) {
       await handlePurchase(sock, buyerJid, vendor, session, matches[0]);
       return;
     }
-    await sendWithDelay(sock, buyerJid, `Please reply with a number (1-${inventory.length}) to select an item.`);
+    await sendWithDelay(sock, buyerJid, `Please reply with a number (1-${inventory.length}) or tap the list to select an item.`);
     return;
   }
 
@@ -259,15 +269,11 @@ async function handleMessage(sock, msg) {
         last_item_sku: item.sku
       });
     } else if (matches.length > 1) {
-      const list = matches.map((m, i) =>
-        `*${i + 1}.* ${m.name} — ₦${m.price.toLocaleString()} (${m.quantity} left)`
-      ).join('\n');
-      const reply = `I found a few options for you:\n\n${list}\n\nWhich one interests you? Reply with the number or name!`;
-      await sendWithDelay(sock, buyerJid, reply);
-      logReply(reply);
-      await appendMessage(buyerJid, vendor.id, 'bot', reply);
+      await sendListMessage(sock, buyerJid, 'I found a few options for you. Tap to pick one:', 'Choose option', matches);
+      logReply(' [List] I found a few options for you.');
+      await appendMessage(buyerJid, vendor.id, 'bot', '[List] I found a few options for you.');
       await upsertSession(buyerJid, vendor.id, {
-        intent_state: 'querying',
+        intent_state: 'selecting_item',
         last_item_name: null,
         last_item_sku: null
       });
@@ -301,26 +307,17 @@ async function handleMessage(sock, msg) {
       return;
     }
 
-    // 4) Multiple matches — let them pick
+    // 4) Multiple matches — native list (tap to select)
     if (matches.length > 1) {
-      const list = matches.map((m, i) =>
-        `*${i + 1}.* ${m.name} — ₦${m.price.toLocaleString()} (${m.quantity} left)`
-      ).join('\n');
-      const selectMsg = `Which one would you like to buy?\n\n${list}\n\n_Reply with the number to select._`;
-      await sendWithDelay(sock, buyerJid, selectMsg);
-      logReply(selectMsg);
+      await sendListMessage(sock, buyerJid, 'Which one would you like to buy?', 'Choose item', matches);
+      logReply(' [List] Which one would you like to buy?');
       await upsertSession(buyerJid, vendor.id, { intent_state: 'selecting_item' });
       return;
     }
 
-    // 5) No match at all — show full catalog
-    const list = inventory.map((i, idx) =>
-      `*${idx + 1}.* ${i.name} — ₦${i.price.toLocaleString()} (${i.quantity} left)`
-    ).join('\n');
-
-    const selectMsg = `Which item would you like to buy?\n\n${list}\n\n_Reply with the number to select._`;
-    await sendWithDelay(sock, buyerJid, selectMsg);
-    logReply(selectMsg);
+    // 5) No match at all — show full catalog as native list
+    await sendListMessage(sock, buyerJid, 'Which item would you like to buy?', 'Choose item', inventory);
+    logReply(' [List] Which item would you like to buy?');
     await upsertSession(buyerJid, vendor.id, { intent_state: 'selecting_item' });
   }
 
