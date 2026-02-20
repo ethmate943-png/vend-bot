@@ -114,6 +114,32 @@ Optional: set **QR_SECRET** in env and use **`/qr?key=YOUR_SECRET`** so only peo
 
 ---
 
+## 8. If the server times out or won’t start
+
+Koyeb expects your app to respond to health checks within a short time. VendBot is set up so the **HTTP server answers `/health` right away**; WhatsApp connects in the background, so a slow QR/auth step no longer causes a deploy timeout.
+
+**To get the app running again:**
+
+1. **Restart the service**
+   - In [Koyeb Dashboard](https://app.koyeb.com) → your app → **Services** → click your service (e.g. `vendbot`).
+   - Open the **⋮** menu (or **Settings**) and choose **Redeploy** or **Restart**.
+   - Wait 1–2 minutes, then open `https://YOUR_SERVICE.koyeb.app/health`. If you see `{"status":"ok",...}`, the server is up.
+
+2. **Redeploy from source**
+   - If you changed code: push to GitHub, then in Koyeb go to **Deployments** and trigger a new deployment (or use “Redeploy” on the latest commit).
+   - After deploy, check **Logs** for `✅ Server running on port 3000` and `VendBot running`. WhatsApp may still show “Scan QR” until you open `/qr` and scan again.
+
+3. **Check logs**
+   - **Logs** tab in Koyeb shows why a deploy failed (e.g. missing env var, crash on startup). Look for red error lines right after “Starting VendBot…”.
+
+4. **Health check (Koyeb settings)**
+   - In the service **Settings** → **Health check** (if available), use:
+     - **Path**: `/health`
+     - **Port**: `3000` (or leave default)
+   - This way Koyeb only marks the app “healthy” when `/health` returns 200.
+
+---
+
 ## Summary
 
 | What | URL |

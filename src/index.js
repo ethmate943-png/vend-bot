@@ -15,11 +15,16 @@ async function main() {
 
   setMessageHandler(handleMessage);
   setOnConnected(() => getTryPendingReceipts()());
-  await startBot();
+
+  // Start WhatsApp in background so Koyeb health checks get 200 on /health immediately.
+  // If we await startBot(), slow auth/QR can delay "ready" and Koyeb may timeout the deploy.
+  startBot().catch((err) => {
+    console.error('[WA] startBot error:', err?.message || err);
+  });
 
   startCronJobs();
 
-  console.log('✅ VendBot running. Waiting for messages...');
+  console.log('✅ VendBot running. /health is live; WhatsApp is connecting in background.');
 }
 
 main().catch(err => {
