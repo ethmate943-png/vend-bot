@@ -9,6 +9,17 @@ async function getVendorByBotNumber(botNumber) {
   return res.rows[0] || null;
 }
 
+async function getVendorByStoreCode(code) {
+  if (!code || !String(code).trim()) return null;
+  const clean = String(code).toUpperCase().trim().replace(/[^A-Z0-9]/g, '');
+  if (!clean) return null;
+  const res = await query(
+    'SELECT * FROM vendors WHERE UPPER(TRIM(store_code)) = $1 LIMIT 1',
+    [clean]
+  );
+  return res.rows[0] || null;
+}
+
 async function incrementNoCount(vendorId) {
   const res = await query(
     'SELECT no_count, status FROM vendors WHERE id = $1',
@@ -29,4 +40,4 @@ async function incrementNoCount(vendorId) {
   return newCount;
 }
 
-module.exports = { getVendorByBotNumber, incrementNoCount };
+module.exports = { getVendorByBotNumber, getVendorByStoreCode, incrementNoCount };

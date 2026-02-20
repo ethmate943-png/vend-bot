@@ -15,30 +15,35 @@ async function classifyIntent(message, sessionContext = {}, history = []) {
 
   const historyContext = recentChat ? `\nRecent conversation:\n${recentChat}\n` : '';
 
+  const systemPrompt = [
+    '## TASK',
+    'Classify the user message into exactly one intent. This WhatsApp is used for both shopping and personal chat.',
+    '',
+    '## INTENTS (choose one)',
+    'QUERY — Asking about products: availability, price, details, what\'s in stock.',
+    'PURCHASE — Ready to buy: wants to order, saying yes to buying, "I\'ll take it".',
+    'NEGOTIATE — Asking for lower price, discount, or better deal.',
+    'CANCEL — No longer interested, wants to cancel an order.',
+    'CONFIRM — Confirming in a buying context: yes, okay, done, sure (after product/payment discussion).',
+    'IGNORE — Personal chat only: greetings, gossip, jokes, news, or anything not about buying/selling. When in doubt, use IGNORE.',
+    'OTHER — Unclear but possibly commerce-related.',
+    '',
+    '## CONTEXT',
+    contextHint || '(No special context.)',
+    historyContext || '',
+    '',
+    '## RULES',
+    '1. If there is NO prior commerce context in the conversation (no product or bot replies about items/prices), reply IGNORE.',
+    '2. Reply with ONLY the intent word: one of QUERY, PURCHASE, NEGOTIATE, CANCEL, CONFIRM, IGNORE, OTHER.',
+    '3. No punctuation. No explanation. No other text.'
+  ].join('\n');
+
   const res = await client.chat.completions.create({
     model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
     max_tokens: 10,
     temperature: 0.1,
     messages: [
-      {
-        role: 'system',
-        content: `This is a WhatsApp account used by a vendor who also chats personally with friends and family. You must decide if a message is about SHOPPING or just NORMAL CHAT.
-
-Read the recent conversation history carefully to understand context.
-
-Classify the message into exactly one intent:
-QUERY - asking about product availability, details, price, or what's in stock
-PURCHASE - ready to buy, wants to order, saying yes to buying
-NEGOTIATE - asking for a lower price, discount, or better deal
-CANCEL - no longer interested in buying, wants to cancel an order
-CONFIRM - confirming a purchase or delivery (yes, okay, done, sure) in a buying context
-IGNORE - normal personal chat, greetings, gossip, jokes, news, or anything NOT related to buying/selling products. If unsure, choose IGNORE.
-OTHER - unclear but might be commerce-related
-${contextHint}${historyContext}
-IMPORTANT: If the conversation history shows NO prior commerce context (no product discussion, no bot replies about items/prices), default to IGNORE.
-
-Reply with ONLY the intent word. No punctuation. No explanation.`
-      },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: message }
     ]
   });
@@ -48,23 +53,28 @@ Reply with ONLY the intent word. No punctuation. No explanation.`
 }
 
 async function extractOffer(message) {
+  const systemPrompt = [
+    '## TASK',
+    'Extract the price (in Naira) the buyer is offering. Return ONLY the number.',
+    '',
+    '## OUTPUT',
+    'Single integer. No currency symbol, no commas, no text. If no price is mentioned, return 0.',
+    '',
+    '## EXAMPLES',
+    'Can I get it for 20k? → 20000',
+    'I\'ll pay 15,000 → 15000',
+    'Give me last price → 0',
+    'How about ₦18000? → 18000',
+    'Can you do 5k? → 5000',
+    '20 thousand → 20000'
+  ].join('\n');
+
   const res = await client.chat.completions.create({
     model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
     max_tokens: 15,
     temperature: 0,
     messages: [
-      {
-        role: 'system',
-        content: `Extract the price the buyer is offering from their message.
-Return ONLY the number (no currency symbol, no commas).
-If no specific price is mentioned, return 0.
-Examples:
-"Can I get it for 20k?" → 20000
-"I'll pay 15,000" → 15000
-"Give me last price" → 0
-"How about ₦18000?" → 18000
-"Can you do 5k?" → 5000`
-      },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: message }
     ]
   });
@@ -77,32 +87,36 @@ async function matchProducts(message, inventory) {
   if (!inventory.length) return [];
 
   const catalog = inventory.map((item, i) =>
-    `${i}: ${item.name} (${item.category || 'general'})`
+    `  ${i}: ${item.name} (${item.category || 'general'})`
   ).join('\n');
+
+  const systemPrompt = [
+    '## TASK',
+    'Match the buyer message to product INDEX numbers from the catalog. Return only index numbers or NONE.',
+    '',
+    '## CATALOG (index: name category)',
+    catalog,
+    '',
+    '## MATCHING RULES',
+    '- Match by category, keyword, synonym, or description.',
+    '- sneakers / shoes / slides → footwear.',
+    '- earbuds / headphones / airpods / galaxy buds → audio.',
+    '- bag / tote / handbag → bags.',
+    '- dress / clothes / jacket / fabric → apparel.',
+    '- chain / jewelry / necklace → accessories.',
+    '- Return up to 3 matches, best first. Format: comma-separated numbers, e.g. 0,4,9',
+    '- If nothing matches, return exactly: NONE',
+    '',
+    '## OUTPUT',
+    'Either: NONE — or — index numbers only, e.g. 0,2,5. No other text.'
+  ].join('\n');
 
   const res = await client.chat.completions.create({
     model: process.env.GROQ_MODEL || 'llama-3.1-8b-instant',
     max_tokens: 30,
     temperature: 0,
     messages: [
-      {
-        role: 'system',
-        content: `You are a product matcher. Given a buyer's message and a product catalog, return the INDEX numbers of products that match what the buyer is looking for.
-
-Rules:
-- Match by category, type, keyword, synonym, or description
-- "sneakers" matches any shoes/sneakers/slides
-- "earbuds" or "headphones" matches airpods, galaxy buds, etc.
-- "bag" matches tote bag, handbag, etc.
-- "dress" or "clothes" matches dresses, jackets, fabric, etc.
-- "chain" or "jewelry" matches necklaces, chains, etc.
-- Return ONLY comma-separated index numbers (e.g. "0,4,9")
-- If nothing matches, return "NONE"
-- Max 3 matches, best match first
-
-Catalog:
-${catalog}`
-      },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: message }
     ]
   });

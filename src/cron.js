@@ -2,6 +2,9 @@ const cron = require('node-cron');
 const { query } = require('./db');
 const { sendMessage, sendWithDelay } = require('./whatsapp/sender');
 const { getDuePayouts, hasOpenDispute } = require('./safety/escrow');
+const { runContentAgent } = require('./agents/content');
+const { runAbandonmentAgent } = require('./agents/abandonment');
+const { runPricingAgent } = require('./agents/pricing');
 
 function getSock() {
   return require('./whatsapp/client').getSock();
@@ -62,6 +65,36 @@ function startCronJobs() {
       }
     } catch (err) {
       console.error('[CRON] Escrow release error:', err.message);
+    }
+  });
+
+  // Daily 7am — content agent (Status + Instagram copy)
+  cron.schedule('0 7 * * *', async () => {
+    try {
+      await runContentAgent();
+      console.log('[CRON] Content agent ran');
+    } catch (err) {
+      console.error('[CRON] Content agent error:', err.message);
+    }
+  });
+
+  // Every 35 mins — abandonment recovery
+  cron.schedule('*/35 * * * *', async () => {
+    try {
+      await runAbandonmentAgent();
+      console.log('[CRON] Abandonment agent ran');
+    } catch (err) {
+      console.error('[CRON] Abandonment agent error:', err.message);
+    }
+  });
+
+  // Sunday 8pm — weekly pricing report
+  cron.schedule('0 20 * * 0', async () => {
+    try {
+      await runPricingAgent();
+      console.log('[CRON] Pricing agent ran');
+    } catch (err) {
+      console.error('[CRON] Pricing agent error:', err.message);
     }
   });
 

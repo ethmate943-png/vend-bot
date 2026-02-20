@@ -127,16 +127,26 @@ async function startBot() {
     }
   });
 
+  const processedIds = new Set();
+  const DEDUPE_TTL_MS = 60000;
+
   sock.ev.on('messages.upsert', async (upsert) => {
     if (upsert.type !== 'notify') return;
 
     for (const msg of upsert.messages || []) {
       const jid = msg.key?.remoteJid || '';
+      const msgId = msg.key?.id;
 
       // Only process DMs (skip groups, broadcasts, status)
       if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid')) continue;
       if (msg.key?.fromMe) continue;
       if (!msg.message) continue;
+
+      if (msgId) {
+        if (processedIds.has(msgId)) continue;
+        processedIds.add(msgId);
+        setTimeout(() => processedIds.delete(msgId), DEDUPE_TTL_MS);
+      }
 
       // Skip messages from before we connected (offline/queued messages)
       const ts = typeof msg.messageTimestamp === 'object'

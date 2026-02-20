@@ -7,6 +7,10 @@ const { generatePaymentLink } = require('../payments/mono');
 const { sendMessage, sendWithDelay, sendButtons, sendListMessage } = require('./sender');
 const { handleDeliveryReply } = require('../payments/webhook');
 const { checkVelocity } = require('../safety/velocity');
+const { handleOnboarding } = require('../vendors/onboarding');
+const { handleInventoryCommand } = require('../inventory/commands');
+const { broadcastToAllBuyers } = require('../crm/broadcast');
+const { getBuyerProfile, formatBuyerProfileMessage } = require('../crm/manager');
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -53,6 +57,16 @@ async function handlePurchase(sock, buyerJid, vendor, session, item, negotiatedP
   const velocity = await checkVelocity(vendor.id);
   if (velocity.blocked) {
     await sendWithDelay(sock, buyerJid, 'This vendor is temporarily unavailable. Please try again later.');
+    return;
+  }
+
+  if (vendor.trust_stage === 'notification_only') {
+    await sendWithDelay(sock, buyerJid,
+      `${vendor.business_name} will send you payment details directly. Let me connect you now!`
+    );
+    await sendMessage(sock, `${vendor.whatsapp_number}@s.whatsapp.net`,
+      `💬 *Buyer ready to pay!*\n\nItem: ${item.name} — ₦${item.price.toLocaleString()}\nBuyer: wa.me/${buyerJid.replace('@s.whatsapp.net', '')}\n\nReach out directly to collect payment.`
+    );
     return;
   }
 
@@ -119,6 +133,71 @@ async function handleMessage(sock, msg) {
   const vendor = await getVendorByBotNumber(botNumber);
   if (!vendor || vendor.status === 'banned' || vendor.status === 'suspended') return;
 
+  const senderPhone = buyerJid.replace('@s.whatsapp.net', '').replace(/\D/g, '');
+  const vendorPhone = (vendor.whatsapp_number || '').replace(/\D/g, '');
+  const isVendorMessage = senderPhone === vendorPhone;
+
+  if (isVendorMessage) {
+    if (vendor.onboarding_step && vendor.onboarding_step !== 'complete') {
+      const handled = await handleOnboarding(sock, buyerJid, text, vendor);
+      if (handled) return;
+    }
+    if ((text || '').toUpperCase().trim() === 'VENDOR-SETUP' || (text || '').toUpperCase().trim() === 'ADMIN') {
+      await handleOnboarding(sock, buyerJid, 'start', { ...vendor, onboarding_step: 'start' });
+      return;
+    }
+    const invReply = await handleInventoryCommand(text, vendor);
+    if (invReply !== null) {
+      if (typeof invReply === 'object' && invReply.waitlistBuyers && invReply.waitlistBuyers.length > 0) {
+        await sendWithDelay(sock, buyerJid, invReply.reply);
+        for (const w of invReply.waitlistBuyers) {
+          const jid = w.buyer_jid;
+          if (jid) {
+            await sendWithDelay(sock, jid, `${vendor.business_name}: *${invReply.restockedItem.name}* is back in stock! Reply to order.`);
+            await require('../db').query('UPDATE waitlist SET notified = true WHERE buyer_jid = $1 AND vendor_id = $2 AND item_sku = $3', [jid, vendor.id, invReply.restockedItem.sku]);
+          }
+        }
+      } else {
+        await sendWithDelay(sock, buyerJid, typeof invReply === 'object' ? invReply.reply : invReply);
+      }
+      return;
+    }
+    if ((text || '').toLowerCase().startsWith('broadcast:')) {
+      const message = text.replace(/^broadcast:?\s*/i, '').trim();
+      if (message) {
+        const { sent } = await broadcastToAllBuyers(vendor.id, message, vendor);
+        await sendWithDelay(sock, buyerJid, `Broadcast sent to ${sent} buyer(s).`);
+      }
+      return;
+    }
+    if ((text || '').toUpperCase() === 'DETAILS') {
+      const txnRes = await require('../db').query(
+        'SELECT buyer_jid FROM transactions WHERE vendor_id = $1 AND status = $2 AND delivery_confirmed IS NULL ORDER BY created_at DESC LIMIT 1',
+        [vendor.id, 'paid']
+      );
+      const txn = txnRes.rows && txnRes.rows[0];
+      if (txn) {
+        const profile = await getBuyerProfile(txn.buyer_jid, vendor.id);
+        await sendWithDelay(sock, buyerJid, formatBuyerProfileMessage(profile));
+      } else {
+        await sendWithDelay(sock, buyerJid, 'No pending order to show details for.');
+      }
+      return;
+    }
+    if (['DELIVERED', 'TOMORROW', 'ISSUE'].includes((text || '').toUpperCase().trim())) {
+      const txnRes = await require('../db').query(
+        'SELECT id FROM transactions WHERE vendor_id = $1 AND status = $2 AND delivery_confirmed IS NULL ORDER BY created_at DESC LIMIT 1',
+        [vendor.id, 'paid']
+      );
+      const txn = txnRes.rows && txnRes.rows[0];
+      if (txn) {
+        await require('../db').query('UPDATE transactions SET delivery_status = $1 WHERE id = $2', [text.toUpperCase().trim(), txn.id]);
+        await sendWithDelay(sock, buyerJid, 'Updated. Thanks!');
+      }
+      return;
+    }
+  }
+
   const session = await getSession(buyerJid, vendor.id) || {};
   const inventory = await getInventory(vendor.sheet_id, vendor.sheet_tab);
   const history = getChatHistory(session);
@@ -128,6 +207,27 @@ async function handleMessage(sock, msg) {
   if (session.intent_state === 'awaiting_delivery_confirm') {
     await handleDeliveryReply(buyerJid, vendor.id, text);
     return;
+  }
+
+  // Awaiting payment: resend link if they ask (one message only)
+  if (session.intent_state === 'awaiting_payment' && session.pending_payment_ref) {
+    const resendWords = ['resend', 'link', 'send link', 'send', 'again', 'yes', 'pay', 'payment'];
+    if (resendWords.some(w => text.toLowerCase().includes(w))) {
+      const { query } = require('../db');
+      const txnRes = await query(
+        'SELECT item_name, amount, mono_link, status FROM transactions WHERE mono_ref = $1 LIMIT 1',
+        [session.pending_payment_ref]
+      );
+      const txn = txnRes.rows && txnRes.rows[0];
+      if (txn && txn.status === 'pending' && txn.mono_link) {
+        const amt = `₦${(txn.amount / 100).toLocaleString()}`;
+        await sendWithDelay(sock, buyerJid,
+          `🔗 *Payment link for ${txn.item_name}* (${amt}):\n\n${txn.mono_link}\n\n_Link expires in 30 minutes._`
+        );
+        logReply(' [Resent payment link]');
+        return;
+      }
+    }
   }
 
   // Handle active negotiation replies
@@ -232,21 +332,47 @@ async function handleMessage(sock, msg) {
   if (session.intent_state === 'selecting_item') {
     const bySku = inventory.find((i) => i.sku === text.trim());
     if (bySku) {
+      if (bySku.quantity < 1) {
+        await sendWithDelay(sock, buyerJid, `Sorry, *${bySku.name}* is out of stock now. Pick another item from the list.`);
+        await sendListMessage(sock, buyerJid, 'Choose an available item:', 'Choose item', inventory.filter(i => i.quantity > 0));
+        return;
+      }
       await handlePurchase(sock, buyerJid, vendor, session, bySku);
       return;
     }
     const num = parseInt(text.trim(), 10);
     if (num >= 1 && num <= inventory.length) {
       const item = inventory[num - 1];
+      if (item.quantity < 1) {
+        await sendWithDelay(sock, buyerJid, `That item is out of stock now. Please pick another (reply with a number or tap the list).`);
+        await sendListMessage(sock, buyerJid, 'Available items:', 'Choose item', inventory.filter(i => i.quantity > 0));
+        return;
+      }
       await handlePurchase(sock, buyerJid, vendor, session, item);
       return;
     }
     const matches = await matchProducts(text, inventory);
     if (matches.length === 1) {
-      await handlePurchase(sock, buyerJid, vendor, session, matches[0]);
+      const one = matches[0];
+      if (one.quantity < 1) {
+        await sendWithDelay(sock, buyerJid, `Sorry, *${one.name}* is out of stock. Pick something else from the list.`);
+        await sendListMessage(sock, buyerJid, 'Available items:', 'Choose item', inventory.filter(i => i.quantity > 0));
+        return;
+      }
+      await handlePurchase(sock, buyerJid, vendor, session, one);
       return;
     }
-    await sendWithDelay(sock, buyerJid, `Please reply with a number (1-${inventory.length}) or tap the list to select an item.`);
+    await sendWithDelay(sock, buyerJid, `Reply with a number (1-${inventory.length}) or tap the list to select.`);
+    return;
+  }
+
+  // Help / menu: one short reply so we don't trigger double responses
+  const lowerText = text.toLowerCase().trim();
+  if (lowerText === 'help' || lowerText === 'menu' || lowerText === 'options') {
+    const reply = `Here’s how I can help:\n\n• Ask what’s in stock (e.g. "Do you have sneakers?")\n• Say what you want to buy (e.g. "I want the black one")\n• Reply with a number when I show you a list\n• Say *cancel* if you change your mind\n\nWhat are you looking for? 😊`;
+    await sendWithDelay(sock, buyerJid, reply);
+    logReply(reply);
+    await appendMessage(buyerJid, vendor.id, 'bot', reply);
     return;
   }
 
@@ -404,7 +530,8 @@ async function handleMessage(sock, msg) {
     await sendWithDelay(sock, buyerJid, reply);
     logReply(reply);
     await appendMessage(buyerJid, vendor.id, 'bot', reply);
-    await upsertSession(buyerJid, vendor.id, { intent_state: 'idle', last_item_name: null, last_item_sku: null });
+    const { clearSession } = require('../sessions/manager');
+    await clearSession(buyerJid, vendor.id);
   }
 
   // ── IGNORE — normal personal chat, stay silent ──

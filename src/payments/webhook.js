@@ -1,6 +1,7 @@
 const { query } = require('../db');
 const { decrementQty } = require('../inventory/sheets');
 const { sendWithDelay } = require('../whatsapp/sender');
+const { upsertBuyerAndRelationship, checkAndFlagVip } = require('../crm/manager');
 
 function getSock() {
   return require('../whatsapp/client').getSock();
@@ -106,7 +107,7 @@ async function handlePaymentSuccess(data) {
 
   const txnRes = await query(
     `SELECT t.*, v.whatsapp_number, v.business_name, v.total_transactions,
-            v.sheet_id, v.sheet_tab, v.id as vid
+            v.sheet_id, v.sheet_tab, v.id as vid, v.store_code
      FROM transactions t
      JOIN vendors v ON v.id = t.vendor_id
      WHERE t.mono_ref = $1 LIMIT 1`,
@@ -145,6 +146,11 @@ async function handlePaymentSuccess(data) {
     [txn.vid]
   );
 
+  const buyer = await upsertBuyerAndRelationship(txn.buyer_jid, txn.buyer_phone, txn.vendor_id, txn.amount);
+  if (buyer) {
+    await query('UPDATE transactions SET buyer_id = $1 WHERE id = $2', [buyer.id, txn.id]);
+  }
+
   try {
     await decrementQty(txn.sheet_id, txn.sheet_tab, txn.item_sku);
     await query('UPDATE transactions SET sheet_row_updated = true WHERE id = $1', [txn.id]);
@@ -171,21 +177,20 @@ async function handlePaymentSuccess(data) {
       ? `\n📄 View & download your receipt: ${visualReceiptUrl}\n`
       : '';
 
+    const storeLine = txn.store_code
+      ? `\n_Shop more: wa.me/${(process.env.VENDBOT_NUMBER || '').replace(/\D/g, '')}?text=${txn.store_code}_\n`
+      : '';
     const receiptText =
-      `✅ *PAYMENT RECEIPT*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `🏪 *${txn.business_name}*\n\n` +
-      `📦 Item: *${txn.item_name}*\n` +
-      `💰 Amount: *${amountFormatted}*\n` +
-      `🧾 Ref: \`${reference}\`\n` +
-      `📅 Date: ${date}\n` +
+      `✅ *Payment confirmed!*\n\n` +
+      `You just copped from *${txn.business_name}*\n\n` +
+      `🛍️ ${txn.item_name}\n` +
+      `💰 ₦${(txn.amount / 100).toLocaleString()}\n\n` +
+      `_Ref: ${reference}_\n` +
       receiptLink +
       visualReceiptLine +
-      `\n━━━━━━━━━━━━━━━━━━━━\n` +
-      `Your payment has been received and your order is confirmed.\n\n` +
-      `*${txn.business_name}* will contact you to arrange delivery.\n\n` +
-      `_Your funds are held in escrow for ${holdHours} hours for your protection. ` +
-      `If anything goes wrong, contact wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER}_`;
+      storeLine +
+      `\n_Your funds are held in escrow for ${holdHours} hours. ` +
+      `Issue? Contact wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER || ''}_`;
 
     try {
       await sendWithDelay(sock, txn.buyer_jid, receiptText);
@@ -205,20 +210,22 @@ async function handlePaymentSuccess(data) {
 
     try {
       await sendWithDelay(sock, `${txn.whatsapp_number}@s.whatsapp.net`,
-      `🛍️ *NEW SALE!*\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `📦 Item: *${txn.item_name}*\n` +
-      `💰 Amount: *${amountFormatted}*\n` +
-      `👤 Buyer: ${txn.buyer_phone}\n` +
-      `🧾 Ref: \`${reference}\`\n` +
-      `📅 Date: ${date}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━\n` +
-      `Please arrange delivery for the buyer.\n\n` +
-      `💸 Payout: *${holdHours} hours* after delivery is confirmed.\n` +
-      `_Inventory has been auto-updated on your sheet._`
+        `🛍️ *New Sale!*\n\n` +
+        `*Item:* ${txn.item_name}\n` +
+        `*Amount:* ${amountFormatted}\n` +
+        `*Buyer:* ${txn.buyer_phone}\n` +
+        `*Ref:* ${reference}\n\n` +
+        `👇 Open buyer chat:\nwa.me/${(txn.buyer_phone || '').replace(/\D/g, '')}\n\n` +
+        `Reply:\n*DELIVERED* — mark delivered\n*TOMORROW* — delivering tomorrow\n*ISSUE* — flag problem\n*DETAILS* — buyer history`
       );
     } catch (err) {
       console.error('[PAYMENT] Failed to send vendor notification:', err.message);
+    }
+
+    try {
+      await checkAndFlagVip(txn.buyer_jid, txn.vendor_id, sock);
+    } catch (err) {
+      console.error('[PAYMENT] VIP check error:', err.message);
     }
 
     // Delivery check after 3 hours

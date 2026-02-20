@@ -49,7 +49,51 @@ async function decrementQty(sheetId, tab, sku) {
     valueInputOption: 'RAW',
     requestBody: { values: [[newQty]] },
   });
-  return newQty;
+  return { newQty };
 }
 
-module.exports = { getInventory, decrementQty };
+/** Update quantity for a row by SKU (column B). */
+async function updateItemQty(sheetId, tab, sku, newQty) {
+  const sheets = getSheetsClient();
+  const inventory = await getInventory(sheetId, tab);
+  const idx = inventory.findIndex(i => i.sku === sku);
+  if (idx === -1) throw new Error(`SKU not found: ${sku}`);
+  const excelRow = idx + 2;
+  const qty = Math.max(0, Number(newQty));
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${tab}!D${excelRow}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[qty]] },
+  });
+  return qty;
+}
+
+/** Append rows. Expects items with name, sku, price, quantity, category (optional), minPrice (optional). Sheet columns A:G = name, sku, price, quantity, category, ?, minPrice. */
+async function addItemsToSheet(sheetId, tab, items) {
+  if (!items || items.length === 0) return;
+  const sheets = getSheetsClient();
+  const rows = items.map(i => [
+    i.name || '',
+    i.sku || '',
+    Number(i.price) || 0,
+    Math.max(0, Number(i.quantity) || 1),
+    i.category || '',
+    '',
+    Number(i.minPrice) || Number(i.price) || 0
+  ]);
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: `${tab}!A:G`,
+  });
+  const existing = (res.data.values || []).length;
+  const nextRow = existing + 1;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${tab}!A${nextRow}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: rows },
+  });
+}
+
+module.exports = { getInventory, decrementQty, updateItemQty, addItemsToSheet };
