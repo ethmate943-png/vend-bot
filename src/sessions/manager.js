@@ -33,14 +33,18 @@ async function upsertSession(buyerJid, vendorId, updates) {
 
 async function clearSession(buyerJid, vendorId) {
   await query(
-    `UPDATE sessions SET intent_state = 'idle', pending_payment_ref = NULL, last_item_sku = NULL, last_item_name = NULL WHERE buyer_jid = $1 AND vendor_id = $2`,
+    `UPDATE sessions SET intent_state = 'idle', pending_payment_ref = NULL, last_item_sku = NULL, last_item_name = NULL, list_skus = NULL WHERE buyer_jid = $1 AND vendor_id = $2`,
     [buyerJid, vendorId]
   );
 }
 
 const MAX_HISTORY = 10;
 
+/** When PRIVACY_NO_CHAT_STORAGE is set, we never store or return chat content. */
+const noChatStorage = process.env.PRIVACY_NO_CHAT_STORAGE === 'true' || process.env.PRIVACY_NO_CHAT_STORAGE === '1';
+
 function getChatHistory(session) {
+  if (noChatStorage) return [];
   try {
     return JSON.parse(session.chat_history || '[]');
   } catch {
@@ -49,6 +53,7 @@ function getChatHistory(session) {
 }
 
 async function appendMessage(buyerJid, vendorId, role, text) {
+  if (noChatStorage) return;
   const session = await getSession(buyerJid, vendorId);
   if (!session) return;
   const history = getChatHistory(session);

@@ -1,19 +1,19 @@
-# VendBot — Koyeb (or any Docker) deployment
-FROM node:20-slim
+FROM node:20-alpine
+
+RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-# Install dependencies (production only for smaller image)
-COPY package.json package-lock.json* ./
-COPY patches ./patches
-ENV NODE_ENV=production
-RUN /usr/local/bin/npm install --omit=dev
+COPY package*.json ./
+RUN npm ci --only=production
 
-# App code
-COPY src ./src
+COPY src/ ./src/
 
-# Server listens on PORT (Koyeb sets this)
-ENV NODE_ENV=production
+RUN mkdir -p /app/auth_info_baileys
+
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1))"
 
 CMD ["node", "src/index.js"]

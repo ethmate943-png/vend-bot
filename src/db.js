@@ -1,22 +1,45 @@
 require('dotenv').config();
-const { neon } = require('@neondatabase/serverless');
+const { Pool, neonConfig } = require('@neondatabase/serverless');
 
-const sql = neon(process.env.DATABASE_URL, { fullResults: true });
+// Node has no built-in WebSocket; use 'ws' so Neon's Pool works
+try {
+  const ws = require('ws');
+  neonConfig.webSocketConstructor = ws;
+} catch (_) {
+  // ws optional; without it only HTTP neon() works, not Pool
+}
 
-async function query(text, params, retries = 2) {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await sql.query(text, params || []);
-      return res;
-    } catch (err) {
-      if (attempt < retries && (err.message.includes('fetch') || err.message.includes('timeout') || err.message.includes('ECONNRESET'))) {
-        console.warn(`[DB] Query failed (attempt ${attempt + 1}), retrying...`);
-        await new Promise(r => setTimeout(r, 1000));
-        continue;
-      }
-      throw err;
-    }
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL
+});
+
+pool.on('error', (err) => {
+  console.error('[DB] Pool error:', err.message);
+});
+
+async function query(text, params) {
+  try {
+    const res = await pool.query(text, params);
+    return res;
+  } catch (e) {
+    console.error('[DB] Query error:', e.message, '\nQuery:', text.slice(0, 100));
+    throw e;
   }
 }
 
-module.exports = { query };
+async function withTransaction(callback) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { query, withTransaction, pool };

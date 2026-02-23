@@ -1,30 +1,61 @@
-# Koyeb app definition for VendBot
-# Reference only: create the service in the Koyeb dashboard (GitHub + Dockerfile), then
-# match these settings: port 3000, volume /data, health check /health, env from .env.example.
-# Webhook URL after deploy: https://YOUR_SERVICE.koyeb.app/webhook/paystack
-
 name: vendbot
 
 services:
-  - name: vendbot
-    # Build from repo root using Dockerfile
-    build:
-      dockerfile: Dockerfile
-    # Web service: listen on PORT (Koyeb sets PORT automatically)
+  - name: vendbot-main
+    type: web
+    instance_type: nano
+    regions:
+      - fra
     ports:
       - port: 3000
         protocol: http
-    # Persistent volume for WhatsApp session (auth_info_baileys)
-    # In Koyeb dashboard: Volumes → Add → Path: /data, Size: 1 GB
-    volumes:
-      - path: /data
-        size: 1GB
-    # Health check so Koyeb knows the app is up
     health_checks:
-      - name: http
-        path: /health
+      - path: /health
         port: 3000
-        protocol: http
-        interval: 30s
-    # Env: set all variables from .env.example in Koyeb → Settings → Environment variables
-    # Required: NODE_ENV=production, APP_URL=https://YOUR_APP.koyeb.app, and the rest from .env
+        interval: 30
+        timeout: 5
+        healthy_threshold: 1
+        unhealthy_threshold: 3
+    env:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        secret: DATABASE_URL
+      - key: GROQ_API_KEY
+        secret: GROQ_API_KEY
+      - key: KIMI_API_KEY
+        secret: KIMI_API_KEY
+      - key: KIMI_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
+      - key: KIMI_MODEL
+        value: moonshotai/kimi-k2
+      - key: PAYSTACK_SECRET_KEY
+        secret: PAYSTACK_SECRET_KEY
+      - key: PAYSTACK_PUBLIC_KEY
+        secret: PAYSTACK_PUBLIC_KEY
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        secret: GOOGLE_SERVICE_ACCOUNT_EMAIL
+      - key: GOOGLE_PRIVATE_KEY
+        secret: GOOGLE_PRIVATE_KEY
+      - key: APP_URL
+        secret: APP_URL
+      - key: VENDBOT_NUMBER
+        secret: VENDBOT_NUMBER
+      - key: ADMIN_WHATSAPP
+        secret: ADMIN_WHATSAPP
+      - key: ADMIN_CODE
+        value: VENDOR-SETUP
+      - key: PAYMENT_LINK_EXPIRY_MINUTES
+        value: "30"
+      - key: ESCROW_HOLD_NEW_VENDOR_HOURS
+        value: "72"
+      - key: ESCROW_HOLD_ESTABLISHED_HOURS
+        value: "24"
+      - key: ESTABLISHED_VENDOR_MIN_TRANSACTIONS
+        value: "20"
+      - key: DISPUTE_WHATSAPP_NUMBER
+        secret: DISPUTE_WHATSAPP_NUMBER
+    volumes:
+      - id: baileys-auth
+        path: /app/auth_info_baileys
+        size: 1

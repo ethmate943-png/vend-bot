@@ -62,7 +62,7 @@ function setOnConnected(cb) {
 
 async function startBot() {
   const authPath = process.env.NODE_ENV === 'production'
-    ? '/data/auth_info_baileys'
+    ? '/app/auth_info_baileys'
     : 'auth_info_baileys';
 
   const { state, saveCreds } = await useMultiFileAuthState(authPath);
@@ -159,17 +159,39 @@ async function startBot() {
       const body = msg.message.conversation
         || msg.message.extendedTextMessage?.text
         || '';
-      if (!body.trim()) continue;
+      const ir = msg.message?.interactiveResponseMessage;
+      const hasListReply = msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId
+        || ir?.listReply?.singleSelectReply?.selectedRowId
+        || ir?.listReply?.id
+        || ir?.listReply?.selectedRowId
+        || ir?.list_reply?.id
+        || ir?.list_reply?.selectedRowId
+        || msg.message?.templateButtonReplyMessage?.selectedId
+        || !!ir; // pass through any interactive response so listener can try to parse
+      const hasButtonReply = msg.message?.buttonsResponseMessage?.selectedButtonId;
+      if (!body.trim() && !hasListReply && !hasButtonReply) continue;
 
       const phone = jid.replace('@s.whatsapp.net', '');
-      console.log(`[WA] 📨 DM from ${phone}: "${body.slice(0, 60)}"`);
+      if (process.env.PRIVACY_NO_CHAT_LOGS === 'true' || process.env.PRIVACY_NO_CHAT_LOGS === '1') {
+        console.log('[WA] 📨 DM received');
+      } else {
+        console.log(`[WA] 📨 DM from ${phone}: "${body.slice(0, 60)}"`);
+      }
 
       try {
         if (messageHandler) {
           await messageHandler(sock, msg);
         }
       } catch (err) {
-        console.error('[WA] Message handler error:', err.message);
+        const status = err.status ?? err.response?.status ?? err.statusCode;
+        const body = err.response?.data ? JSON.stringify(err.response.data).slice(0, 200) : '';
+        console.error('[WA] Message handler error:', err.message, status ? `(${status})` : '', body || '');
+        try {
+          const jid = msg.key?.remoteJid;
+          if (jid && sock && !msg.key?.fromMe) {
+            await sock.sendMessage(jid, { text: 'Something went wrong on our end — please try again in a moment.' });
+          }
+        } catch (_) {}
       }
     }
   });

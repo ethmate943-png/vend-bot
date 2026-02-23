@@ -68,8 +68,8 @@ function startCronJobs() {
     }
   });
 
-  // Daily 7am — content agent (Status + Instagram copy)
-  cron.schedule('0 7 * * *', async () => {
+  // Daily 7am Nigeria (6am UTC) — content agent (Status + Instagram copy)
+  cron.schedule('0 6 * * *', async () => {
     try {
       await runContentAgent();
       console.log('[CRON] Content agent ran');
@@ -78,8 +78,8 @@ function startCronJobs() {
     }
   });
 
-  // Every 35 mins — abandonment recovery
-  cron.schedule('*/35 * * * *', async () => {
+  // Every 12 hours — abandonment recovery (activity-based: only nudges when buyer inactive)
+  cron.schedule('0 */12 * * *', async () => {
     try {
       await runAbandonmentAgent();
       console.log('[CRON] Abandonment agent ran');
@@ -88,13 +88,51 @@ function startCronJobs() {
     }
   });
 
-  // Sunday 8pm — weekly pricing report
-  cron.schedule('0 20 * * 0', async () => {
+  // Sunday 8pm Nigeria (7pm UTC) — weekly pricing report
+  cron.schedule('0 19 * * 0', async () => {
     try {
       await runPricingAgent();
       console.log('[CRON] Pricing agent ran');
     } catch (err) {
       console.error('[CRON] Pricing agent error:', err.message);
+    }
+  });
+
+  // Midnight UTC daily — graduate eligible standard vendors to verified
+  cron.schedule('0 23 * * *', async () => {
+    try {
+      await query(`
+        UPDATE vendors SET
+          vendor_tier = 'verified',
+          daily_cap_kobo = 50000000,
+          custom_payout_hold_hours = 24,
+          status = 'active'
+        WHERE vendor_tier = 'standard'
+          AND (confirmed_deliveries >= 3 OR total_transactions >= 3)
+          AND created_at <= NOW() - INTERVAL '30 days'
+          AND status = 'probation'
+      `);
+      console.log('[CRON] Vendor graduation ran');
+    } catch (err) {
+      console.error('[CRON] Graduation error:', err.message);
+    }
+  });
+
+  // Sunday 11pm UTC — reset weekly volume baseline
+  cron.schedule('0 22 * * 0', async () => {
+    try {
+      await query(`
+        UPDATE vendors SET
+          baseline_weekly_volume = CASE
+            WHEN baseline_weekly_volume = 0 OR baseline_weekly_volume IS NULL THEN COALESCE(current_week_volume, 0)
+            ELSE (COALESCE(baseline_weekly_volume, 0) + COALESCE(current_week_volume, 0)) / 2
+          END,
+          current_week_volume = 0
+        WHERE vendor_tier IS NOT NULL
+      `);
+      console.log('[CRON] Weekly volume baseline updated');
+    } catch (err) {
+      console.error('[CRON] Volume reset error:', err.message);
     }
   });
 

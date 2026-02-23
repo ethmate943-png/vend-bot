@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { getInventory } = require('../inventory/sheets');
+const { getInventory } = require('../inventory/manager');
 const { getSock } = require('../whatsapp/client');
 const { sendWithDelay } = require('../whatsapp/sender');
 const OpenAI = require('openai').default;
@@ -7,7 +7,7 @@ const OpenAI = require('openai').default;
 const kimi = process.env.KIMI_API_KEY && process.env.KIMI_BASE_URL
   ? new OpenAI({ apiKey: process.env.KIMI_API_KEY, baseURL: process.env.KIMI_BASE_URL })
   : null;
-const model = process.env.KIMI_MODEL || 'moonshotai/kimi-k2';
+const model = process.env.KIMI_MODEL || 'moonshotai/kimi-k2.5';
 const VENDBOT_NUMBER = (process.env.VENDBOT_NUMBER || '').replace(/\D/g, '');
 
 async function runContentAgent() {
@@ -18,8 +18,7 @@ async function runContentAgent() {
 
   for (const vendor of vendors) {
     try {
-      if (!vendor.sheet_id) continue;
-      const inventory = await getInventory(vendor.sheet_id, vendor.sheet_tab || 'Sheet1');
+      const inventory = await getInventory(vendor);
       if (!inventory.length) continue;
 
       const topItems = inventory.slice(0, 5)

@@ -1,0 +1,10 @@
+-- UPDATE 5a — Paystack subaccount vendor columns
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS bank_name TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS bank_code TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS account_number TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS account_name TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS paystack_subaccount_code TEXT;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS subaccount_created BOOLEAN DEFAULT false;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS platform_fee_percent DECIMAL DEFAULT 5.0;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS reserve_percent DECIMAL DEFAULT 10.0;
+ALTER TABLE vendors ADD COLUMN IF NOT EXISTS agreed_at TIMESTAMPTZ;

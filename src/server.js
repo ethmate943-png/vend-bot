@@ -6,6 +6,7 @@ const { handlePaymentSuccess } = require('./payments/webhook');
 const { verifyTransaction } = require('./payments/mono');
 const { getReceiptData } = require('./payments/receipt-data');
 const { getState } = require('./whatsapp/qr-store');
+const { query } = require('./db');
 
 const app = express();
 
@@ -71,6 +72,48 @@ app.get('/qr', async (req, res) => {
     <body><div class="card"><h2>⏳ Connecting…</h2><p>Refresh in a moment to see the QR code.</p></div></body></html>
   `);
 });
+
+// Proxy payment link: /pay/:token binds the link to one transaction (buyer/vendor/order).
+// The real Paystack URL is never sent to the buyer, reducing interception/forwarding risk.
+const PAY_LINK_EXPIRY_MINUTES = 30;
+app.get('/pay/:token', async (req, res) => {
+  const token = (req.params.token || '').trim();
+  if (!token) return res.status(404).send(PAY_HTML('Invalid payment link.', 404));
+
+  const txnRes = await query(
+    `SELECT id, mono_link, status, created_at, item_name, amount FROM transactions WHERE pay_token = $1 LIMIT 1`,
+    [token]
+  );
+  const txn = txnRes.rows && txnRes.rows[0];
+  if (!txn) {
+    return res.status(404).send(PAY_HTML('Invalid or expired payment link. Please request a new link from the seller.', 404));
+  }
+  if (txn.status === 'paid') {
+    return res.send(PAY_HTML('Payment already completed. Your receipt was sent to your WhatsApp.', 200));
+  }
+  if (txn.status === 'expired') {
+    return res.status(410).send(PAY_HTML('This payment link has expired. Please request a new link from the seller.', 410));
+  }
+  const createdAt = new Date(txn.created_at).getTime();
+  if (Date.now() - createdAt > PAY_LINK_EXPIRY_MINUTES * 60 * 1000) {
+    return res.status(410).send(PAY_HTML('This payment link has expired. Please request a new link from the seller.', 410));
+  }
+  if (!txn.mono_link) {
+    return res.status(500).send(PAY_HTML('Payment link is not available. Please try again later.', 500));
+  }
+  res.redirect(302, txn.mono_link);
+});
+
+function PAY_HTML(message, status) {
+  const isError = status >= 400;
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${isError ? 'Payment link' : 'Payment'}</title>
+<style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#075E54;color:#fff;text-align:center}
+.card{background:#128C7E;padding:2rem;border-radius:1rem;max-width:360px}
+h2{margin-top:0;font-size:1.1rem}</style></head>
+<body><div class="card"><h2>${isError ? '⚠️' : '✅'} ${message}</h2></div></body></html>`;
+}
 
 // Payment callback: Paystack redirects the buyer's browser here after they pay.
 // Handle both /payment/callback and /payment/callback/ (trailing slash) so redirect always works.
@@ -332,6 +375,75 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// Dev-only: simulate an incoming message so you can test without another person.
+// Set ENABLE_DEV_SIMULATE=1 and POST { "from": "2348012345678", "text": "AMAKA" }.
+// The bot will process it and send the real reply to that WhatsApp number.
+if (process.env.ENABLE_DEV_SIMULATE === '1' || process.env.ENABLE_DEV_SIMULATE === 'true') {
+  // Trigger abandonment agent once (same as cron). For testing: ensure you have a pending txn 35min–6h old, session awaiting_payment, buyer inactive 45+ min.
+  app.post('/dev/run-abandonment', async (req, res) => {
+    try {
+      const { runAbandonmentAgent } = require('./agents/abandonment');
+      await runAbandonmentAgent();
+      res.json({ ok: true, message: 'Abandonment agent ran. Check logs and WhatsApp.' });
+    } catch (err) {
+      console.error('[DEV] run-abandonment', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Trigger content agent once (Status + Instagram copy for all active/probation vendors).
+  app.post('/dev/run-content', async (req, res) => {
+    try {
+      const { runContentAgent } = require('./agents/content');
+      await runContentAgent();
+      res.json({ ok: true, message: 'Content agent ran. Check logs and WhatsApp.' });
+    } catch (err) {
+      console.error('[DEV] run-content', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Trigger pricing agent once (weekly report for all active/probation vendors).
+  app.post('/dev/run-pricing', async (req, res) => {
+    try {
+      const { runPricingAgent } = require('./agents/pricing');
+      await runPricingAgent();
+      res.json({ ok: true, message: 'Pricing agent ran. Check logs and WhatsApp.' });
+    } catch (err) {
+      console.error('[DEV] run-pricing', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/dev/simulate', express.json(), async (req, res) => {
+    const { from: fromPhone, text } = req.body || {};
+    const phone = String(fromPhone || '').replace(/\D/g, '');
+    const messageText = String(text || '').trim();
+    if (!phone || !messageText) {
+      return res.status(400).json({ error: 'Missing "from" or "text". Example: {"from":"2348012345678","text":"AMAKA"}' });
+    }
+    try {
+      const { getSock } = require('./whatsapp/client');
+      const { handleMessage } = require('./whatsapp/listener');
+      const sock = getSock();
+      if (!sock) {
+        return res.status(503).json({ error: 'WhatsApp not connected yet. Wait for the bot to connect, then try again.' });
+      }
+      const jid = phone + '@s.whatsapp.net';
+      const msg = {
+        key: { remoteJid: jid, fromMe: false, id: 'dev-' + Date.now() },
+        message: { conversation: messageText },
+        messageTimestamp: Math.floor(Date.now() / 1000)
+      };
+      await handleMessage(sock, msg);
+      res.json({ ok: true, message: 'Message processed. Check WhatsApp for the reply.' });
+    } catch (err) {
+      console.error('[DEV_SIMULATE]', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
 }
 
 // Catch-all: so wrong paths don't show "Cannot GET /route" (e.g. bad callback URL)

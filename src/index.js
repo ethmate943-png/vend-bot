@@ -5,6 +5,15 @@ const { getTryPendingReceipts } = require('./payments/webhook');
 const { startCronJobs } = require('./cron');
 const app = require('./server');
 
+process.on('unhandledRejection', (reason) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[UNCAUGHT EXCEPTION]', error);
+  if (error.message?.includes('FATAL')) process.exit(1);
+});
+
 async function main() {
   console.log('🚀 Starting VendBot...');
 

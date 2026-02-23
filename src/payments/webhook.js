@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { decrementQty } = require('../inventory/sheets');
+const { decrementQty } = require('../inventory/manager');
 const { sendWithDelay } = require('../whatsapp/sender');
 const { upsertBuyerAndRelationship, checkAndFlagVip } = require('../crm/manager');
 
@@ -152,10 +152,11 @@ async function handlePaymentSuccess(data) {
   }
 
   try {
-    await decrementQty(txn.sheet_id, txn.sheet_tab, txn.item_sku);
+    const vendorRef = { id: txn.vendor_id, sheet_id: txn.sheet_id, sheet_tab: txn.sheet_tab };
+    await decrementQty(vendorRef, txn.item_sku);
     await query('UPDATE transactions SET sheet_row_updated = true WHERE id = $1', [txn.id]);
   } catch (e) {
-    console.error('[SHEET UPDATE ERROR]', e.message);
+    console.error('[INVENTORY UPDATE ERROR]', e.message);
   }
 
   const amountFormatted = `₦${(txn.amount / 100).toLocaleString()}`;

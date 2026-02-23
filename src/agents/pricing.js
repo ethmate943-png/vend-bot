@@ -1,5 +1,5 @@
 const { query } = require('../db');
-const { getInventory } = require('../inventory/sheets');
+const { getInventory } = require('../inventory/manager');
 const { getSock } = require('../whatsapp/client');
 const { sendWithDelay } = require('../whatsapp/sender');
 const OpenAI = require('openai').default;
@@ -7,7 +7,7 @@ const OpenAI = require('openai').default;
 const kimi = process.env.KIMI_API_KEY && process.env.KIMI_BASE_URL
   ? new OpenAI({ apiKey: process.env.KIMI_API_KEY, baseURL: process.env.KIMI_BASE_URL })
   : null;
-const model = process.env.KIMI_MODEL || 'moonshotai/kimi-k2';
+const model = process.env.KIMI_MODEL || 'moonshotai/kimi-k2.5';
 
 async function runPricingAgent() {
   const res = await query("SELECT * FROM vendors WHERE status IN ('active', 'probation')");
@@ -19,13 +19,13 @@ async function runPricingAgent() {
 
   for (const vendor of vendors) {
     try {
-      if (!vendor.sheet_id) continue;
       const salesRes = await query(
         'SELECT item_name, amount FROM transactions WHERE vendor_id = $1 AND status = $2 AND created_at >= $3',
         [vendor.id, 'paid', weekAgo]
       );
       const sales = salesRes.rows || [];
-      const inventory = await getInventory(vendor.sheet_id, vendor.sheet_tab || 'Sheet1');
+      const inventory = await getInventory(vendor);
+      if (!inventory.length) continue;
 
       const salesText = sales.map(s => `${s.item_name}: ₦${(s.amount / 100).toLocaleString()}`).join('\n') || 'No sales this week';
       const invText = inventory.map(i => `${i.name}: ${i.quantity} in stock, ₦${i.price.toLocaleString()}`).join('\n');
