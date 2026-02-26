@@ -36,6 +36,33 @@ async function getInventory(sheetId, tab = 'Sheet1') {
     .filter(item => item.quantity > 0 && item.name);
 }
 
+/** All rows with a name (including out-of-stock) for search, price, image. */
+async function getInventoryAll(sheetId, tab = 'Sheet1') {
+  const sheets = getSheetsClient();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: `${tab}!A:G`,
+  });
+  const rows = res.data.values || [];
+  if (rows.length < 2) return [];
+  const [, ...data] = rows;
+  return data
+    .map(r => {
+      const price = Number(r[2]) || 0;
+      const minPrice = Number(r[6]) || 0;
+      return {
+        name: r[0] || '',
+        sku: r[1] || '',
+        price,
+        quantity: Number(r[3]) || 0,
+        category: r[4] || '',
+        minPrice: minPrice > 0 ? minPrice : price,
+        image_url: null,
+      };
+    })
+    .filter(item => item.name);
+}
+
 async function decrementQty(sheetId, tab, sku) {
   const sheets = getSheetsClient();
   const inventory = await getInventory(sheetId, tab);
@@ -69,6 +96,23 @@ async function updateItemQty(sheetId, tab, sku, newQty) {
   return qty;
 }
 
+/** Update price (column C) for a row by SKU (column B). */
+async function updateItemPrice(sheetId, tab, sku, newPrice) {
+  const sheets = getSheetsClient();
+  const inventory = await getInventoryAll(sheetId, tab);
+  const idx = inventory.findIndex(i => i.sku === sku);
+  if (idx === -1) throw new Error(`SKU not found: ${sku}`);
+  const excelRow = idx + 2;
+  const price = Math.max(0, Number(newPrice) || 0);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: sheetId,
+    range: `${tab}!C${excelRow}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[price]] },
+  });
+  return price;
+}
+
 /** Append rows. Expects items with name, sku, price, quantity, category (optional), minPrice (optional). Sheet columns A:G = name, sku, price, quantity, category, ?, minPrice. */
 async function addItemsToSheet(sheetId, tab, items) {
   if (!items || items.length === 0) return;
@@ -96,4 +140,4 @@ async function addItemsToSheet(sheetId, tab, items) {
   });
 }
 
-module.exports = { getInventory, decrementQty, updateItemQty, addItemsToSheet };
+module.exports = { getInventory, getInventoryAll, decrementQty, updateItemQty, updateItemPrice, addItemsToSheet };

@@ -2,9 +2,24 @@ const { query } = require('../db');
 
 async function getVendorByBotNumber(botNumber) {
   const clean = botNumber.replace(/[^0-9]/g, '');
-  const res = await query(
+
+  // Try existing vendor first
+  let res = await query(
     'SELECT * FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
     [clean]
+  );
+  let vendor = res.rows[0];
+  if (vendor) return vendor;
+
+  // Auto-create a minimal vendor for this bot number so messaging yourself works
+  const name =
+    process.env.DEFAULT_VENDOR_NAME ||
+    process.env.BUSINESS_NAME ||
+    `My Store ${clean}`;
+
+  res = await query(
+    'INSERT INTO vendors (whatsapp_number, business_name) VALUES ($1, $2) RETURNING *',
+    [clean, name]
   );
   return res.rows[0] || null;
 }

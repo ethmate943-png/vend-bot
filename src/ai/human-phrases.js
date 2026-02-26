@@ -57,6 +57,13 @@ const LIST_INTRO_FIRST = [
   'Here you go — pick one or tell me what you want:'
 ];
 
+const LIST_INTRO_SEARCH = [
+  "We've got some options for you — here's what we have in stock:",
+  "Here's what we have that might work for you:",
+  'Found a few that match. Take a look:',
+  "This is what we have in stock right now:"
+];
+
 const LIST_INTRO_AGAIN = [
   'Here\'s the list again. Tap to pick or reply with the number:',
   'Sending the list again — tap one or reply 1 to {{max}}:',
@@ -127,6 +134,10 @@ function listIntroFirst() {
   return pick(LIST_INTRO_FIRST);
 }
 
+function listIntroSearch() {
+  return pick(LIST_INTRO_SEARCH);
+}
+
 function listIntroAgain(max) {
   return max ? fill(pick(LIST_INTRO_AGAIN), { max }) : pick(LIST_INTRO_AGAIN);
 }
@@ -168,6 +179,7 @@ module.exports = {
   outOfStock,
   listPrompt,
   listIntroFirst,
+  listIntroSearch,
   listIntroAgain,
   listIntroPurchase,
   listFooter,

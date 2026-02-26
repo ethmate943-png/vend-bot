@@ -1084,3 +1084,212 @@ Sheet: Quantity reduced from 2 to 1.
 ```
 
 **That's the definition of done. Ship it.**
+
+---
+
+## Conversation Engine Updates (VendBot)
+
+> VENDBOT — CONVERSATION ENGINE UPDATES ONLY  
+> All updates from this session. Add to AGENT.md.
+
+### New Files
+
+- `src/sessions/pattern.js`
+  - `readConversationPattern(history)`
+  - Looks at last 10 user messages
+  - Counts commerce signal ratio
+  - Returns: `fresh` | `just_talking` | `mostly_talking` | `shopping_mode` | `mixed`
+  - `COMMERCE_SIGNALS` array:
+    - price/cost/₦, buy/pay/order, available/in stock, delivery, size/colour
+
+- `src/ai/gatekeeper.js`
+  - `shouldRespond(text, vendor, session)`
+  - Two modes based on conversation state:
+    - **Active conversation** (`message_count > 0`):
+      - Only block: "ok/k/kk", "lol/lmao", single emoji, single character
+      - Everything else passes through
+    - **Fresh conversation**:
+      - Block: greeting only, acknowledgement, emoji only, identity questions, farewell
+      - Greetings → return welcome override
+      - Identity → return assistant intro override
+      - Ambiguous short message → AI relevance check
+      - Anything with commerce signal → always passes
+
+- `src/sessions/context.js`
+  - `buildContext(buyerJid, vendor, session)`
+  - `extractDiscussedItems(history)`
+  - `detectCurrentFocus(history, session)` → returns: `multi_item` | `topic_switch` | `single_item`
+  - Returns full context object:
+    - `intentState`, `messageCount`, `lastItem`, `cart`, `cartTotal`, `history`, `discussedItems`, `currentFocus`, `recentTransactions`, `isReturning`
+
+- `src/inventory/matcher.js`
+  - `normalise(str)`
+  - `findItemInText(text, inventory)`
+    - exact match first
+    - then fuzzy word-level levenshtein ≤ 2
+  - `findMultipleItemsInText(text, inventory)`
+    - finds **all** items mentioned in one message
+    - used for `PURCHASE_MULTI` intent
+
+### Updated Files
+
+- `src/ai/responder.js`
+  - Add `detectBuyerEnergy(message)`:
+    - checks for Pidgin keywords, excitement, message length, formal language
+    - returns: `pidgin` | `excited` | `casual` | `formal` | `neutral`
+  - Add `ENERGY_GUIDE` map:
+    - `pidgin` → match fully, use Pidgin naturally
+    - `excited` → match warmly, one exclamation max
+    - `casual` → 2 sentences max, don't over-explain
+    - `formal` → professional, full sentences
+    - `neutral` → warm Nigerian English
+  - Add `CATEGORY_PERSONA` map:
+    - `fashion` → good taste, knows what works
+    - `food` → warm like aunty, genuine enthusiasm
+    - `electronics` → knowledgeable, simplify specs
+    - `beauty` → encouraging, knows what works
+    - `furniture` → practical, help them visualise
+    - `other` → warm helpful Nigerian energy
+  - Extend `buildSystemPrompt`:
+    - Inject energy guide and category persona
+    - Add **variety rules**:
+      - never start two replies the same way
+      - rotate confirmation words
+      - vary answer structure
+      - one follow-up question max, only if helpful
+      - short message = short reply
+    - Add **natural language examples** block:
+      - available, scarcity, price, unavailable, post-payment — style only, not word for word
+    - Add **banned words** list:
+      - Absolutely, Certainly, Of course, Great choice, Feel free, Don't hesitate, I'd be happy to, Wonderful, Fantastic, Noted
+    - Inject **state hints**:
+      - `querying` → what item was last discussed
+      - `awaiting_payment` → link already sent
+      - `awaiting_delivery_confirm` → waiting for reply
+  - Add `generateContextualResponse(text, vendor, history, pattern)`:
+    - Used when pattern is `just_talking` or `mostly_talking`
+    - Pattern-specific:
+      - `just_talking`:
+        - do **not** sell anything
+        - do **not** suggest products
+        - do **not** ask "are you looking for something"
+        - respond like a warm human, short, match energy, let them lead
+      - `mostly_talking`:
+        - respond naturally
+        - acknowledge product mentions if they come up
+        - do not push, suggest, or nudge
+        - let them lead
+      - `mixed`:
+        - follow their lead
+        - engage commerce angle only if they raised it
+        - never force commerce into non-commerce message
+  - Update `generateReply` signature:
+    - `generateReply(message, inventory, vendor, history, session)`
+    - Pass `history` and `session` (state hints) into the model
+
+- `src/ai/classifier.js`
+  - Add new intents:
+    - `PURCHASE_MULTI` — buying multiple items at once
+    - `ADD_TO_CART` — add item, keep browsing
+    - `VIEW_CART` — wants to see cart
+    - `TOPIC_SWITCH` — moving to a different item entirely
+  - Update classifier prompt:
+    - Accept and use **full context** object, not just `session`
+    - Include recent 6 messages as conversation snippet
+    - Include current state hint and cart state
+    - Include `currentFocus` hint
+    - Add explicit Nigerian Pidgin examples per intent
+    - Add negative examples to prevent misrouting:
+      - "yes" after product = `PURCHASE`
+      - "yes" after question = `CONFIRM`
+      - "how much" alone = `QUERY` (not `PURCHASE`)
+      - "abeg reduce am" = `NEGOTIATE`
+      - delivery/size questions = `QUERY`
+
+- `src/sessions/manager.js`
+  - Add `appendHistory(buyerJid, vendorId, role, content)`:
+    - appends `{ role, content, ts }` to `conversation_history`
+    - trims to last 12 messages
+  - Ensure `getSession` returns `conversation_history`
+  - Track first message always regardless of gatekeeper:
+    - `isFirstMessage = message_count === 0`
+    - if first message → save to history even if blocked
+  - Track blocked messages as placeholders:
+    - gatekeeper blocks mid-convo →
+    - append `{ role: 'user', content: '[acknowledgement]' }`
+
+- `src/whatsapp/sender.js`
+  - Update `sendWithDelay`:
+    - Calculate typing time from word count:
+      - `delayMs = clamp(600 + wordCount * 120, 600, 2500)`
+    - Show composing indicator during delay, paused after send
+
+- `src/whatsapp/listener.js` (buyer flow)
+  - At top of `handleBuyerFlow`:
+    - `isFirstMessage` check
+    - `bot_paused` check
+  - **Layer 1 — gatekeeper**:
+    - import `shouldRespond`
+    - if `!gate.respond`:
+      - if first message → `appendHistory` with actual text
+      - else → `appendHistory` with `[reason]` placeholder
+      - return early
+    - if `gate.override`:
+      - send override
+      - `appendHistory` both sides
+      - increment `message_count`
+      - return
+  - **Layer 2 — context builder**:
+    - import `buildContext`
+    - call before `classifyIntent`
+    - pass context to all downstream calls
+  - **Layer 3 — pattern reader**:
+    - import `readConversationPattern`
+    - call after `buildContext`
+    - if `just_talking` or `mostly_talking`:
+      - skip classification
+      - call `generateContextualResponse` with pattern
+      - `appendHistory` both sides
+      - return early
+  - Update intent handling:
+    - Pass full context into classifier
+    - Add `TOPIC_SWITCH` handler:
+      - clear `last_item_*` and `last_item_price_*` in session
+      - rebuild context, treat as fresh `QUERY`
+    - Add `PURCHASE_MULTI` handler:
+      - use `findMultipleItemsInText`
+      - add all found items to cart
+      - send cart summary with total
+      - invite to PAY or keep browsing
+    - Add `ADD_TO_CART` handler:
+      - use `findItemInText` or `lastItem`
+      - add to cart
+      - confirm addition with cart count/total
+    - Add `VIEW_CART` handler:
+      - get cart
+      - format and send
+    - Update `OTHER` intent handler:
+      - if conversation active → `generateContextualResponse`
+      - if fresh → welcome message and ask what they want
+  - Always call `appendHistory` after every exchange (user + bot)
+
+### Database
+
+- `migrations/002_conversation_updates.sql`
+  - `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS conversation_history JSONB DEFAULT '[]';`
+  - `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS message_count INT DEFAULT 0;`
+  - `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_state TEXT;`
+  - `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_state_data JSONB;`
+
+### Build Order
+
+1. `migrations/002_conversation_updates.sql`
+2. `src/sessions/pattern.js`
+3. `src/inventory/matcher.js`
+4. `src/sessions/context.js`
+5. `src/ai/gatekeeper.js`
+6. `src/sessions/manager.js` (appendHistory update)
+7. `src/whatsapp/sender.js` (typing delay update)
+8. `src/ai/classifier.js` (new intents + context)
+9. `src/ai/responder.js` (energy + persona + contextual)
+10. `src/whatsapp/listener.js` (full handleBuyerFlow update)

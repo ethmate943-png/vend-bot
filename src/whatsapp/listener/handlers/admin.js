@@ -55,6 +55,26 @@ async function handleAdminCommand(sock, text, adminJid) {
     return;
   }
 
+  if (upper.startsWith('NAME:')) {
+    const parts = text.replace(/^name:\s*/i, '').trim().split(/\s+/);
+    const code = (parts[0] || '').toUpperCase();
+    const newName = parts.slice(1).join(' ').trim();
+    if (!newName) {
+      await sendMessage(sock, adminJid, 'Use: NAME: STORECODE New Store Name');
+      return;
+    }
+    const res = await query(
+      'UPDATE vendors SET business_name = $1 WHERE store_code = $2 RETURNING id',
+      [newName.slice(0, 255), code]
+    );
+    if (!res.rows || res.rows.length === 0) {
+      await sendMessage(sock, adminJid, `Store code "${code}" not found`);
+      return;
+    }
+    await sendMessage(sock, adminJid, `✅ ${code} → business name set to "${newName.slice(0, 255)}"`);
+    return;
+  }
+
   if (upper.startsWith('BAN:')) {
     const parts = text.replace(/^ban:\s*/i, '').trim().split(/\s+/);
     const code = (parts[0] || '').toUpperCase();

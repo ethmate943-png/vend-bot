@@ -7,6 +7,7 @@ const { Boom } = require('@hapi/boom');
 const qrcodeTerminal = require('qrcode-terminal');
 const fs = require('fs');
 const { setQR, setConnected } = require('./qr-store');
+const { isOutgoingMessageId } = require('./sender');
 
 let sock = null;
 let messageHandler = null;
@@ -131,15 +132,20 @@ async function startBot() {
   const DEDUPE_TTL_MS = 60000;
 
   sock.ev.on('messages.upsert', async (upsert) => {
-    if (upsert.type !== 'notify') return;
-
     for (const msg of upsert.messages || []) {
       const jid = msg.key?.remoteJid || '';
       const msgId = msg.key?.id;
 
+      // Ignore echoes of messages that this process sent (especially in self-chat/@lid)
+      if (msgId && isOutgoingMessageId(msgId)) continue;
+
       // Only process DMs (skip groups, broadcasts, status)
       if (!jid.endsWith('@s.whatsapp.net') && !jid.endsWith('@lid')) continue;
-      if (msg.key?.fromMe) continue;
+      // Skip our own messages to others, but allow \"message yourself\" / @lid so vendor can chat with the bot
+      const botNum = (sock.user?.id || '').split(':')[0].replace(/\D/g, '');
+      const remoteNum = jid.replace('@s.whatsapp.net', '').replace(/@lid.*$/, '').replace(/\D/g, '');
+      const isSelfChat = remoteNum === botNum || jid.endsWith('@lid');
+      if (msg.key?.fromMe && !isSelfChat) continue;
       if (!msg.message) continue;
 
       if (msgId) {

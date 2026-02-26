@@ -8,7 +8,9 @@ const VENDBOT_NUMBER = process.env.VENDBOT_NUMBER || '';
 /** Full list of vendor commands — shown when they finish onboarding and when they type HELP or COMMANDS. */
 function getVendorCommandsMessage(vendor) {
   const botNum = (VENDBOT_NUMBER || '').replace(/\D/g, '');
-  const link = botNum ? `wa.me/${botNum}?text=${(vendor.store_code || '').toUpperCase()}` : '(store link)';
+  const code = (vendor.store_code || '').toUpperCase();
+  const textParam = code ? encodeURIComponent(`${code} hi`) : '';
+  const link = botNum && textParam ? `wa.me/${botNum}?text=${textParam}` : '(store link)';
   const extra = useSheets(vendor) ? '' : '\n• *remove:* item name — remove from list\n• *image:* item name, URL — set product photo\n';
   return (
     `📋 *VendBot commands*\n\n` +
@@ -24,6 +26,7 @@ function getVendorCommandsMessage(vendor) {
     `• *DETAILS* — buyer profile for latest order\n` +
     `• *DELIVERED* / *TOMORROW* / *ISSUE* — update delivery for latest order\n\n` +
     `*Other*\n` +
+    `• *PROFILE* — see and edit your settings (includes business name, store code, etc.)\n` +
     `• *broadcast:* your message — message all past buyers\n\n` +
     `*Your store link:* ${link}\n\n` +
     `Reply *help* or *commands* anytime to see this again.`
@@ -45,6 +48,15 @@ async function handleOnboarding(sock, jid, text, vendor) {
   if (step === 'business_name') {
     const name = (text || '').trim();
     if (!name) return true;
+
+    const badNamePattern = /(something went wrong|wrong name|test store|stupid|nonsense|asdf|qwer)/i;
+    if (badNamePattern.test(name) || name.length < 3) {
+      await sendWithDelay(sock, jid,
+        `This business name doesn't look right.\n\nPlease reply with the *real* name buyers should see — e.g. "Amaka Fashion", "Lekki Gadget Hub".`
+      );
+      return true;
+    }
+
     await query('UPDATE vendors SET business_name = $1, onboarding_step = $2 WHERE id = $3', [name, 'store_code', vendor.id]);
     await sendWithDelay(sock, jid,
       `Love it — *${name}* 🔥\n\nNow choose a *store code*. Short, memorable, all caps.\nExamples: AMAKA, SNEAKERHUB\n\n*What's your store code?*`
@@ -60,9 +72,123 @@ async function handleOnboarding(sock, jid, text, vendor) {
       await sendWithDelay(sock, jid, `"${code}" is taken 😅 Try another.`);
       return true;
     }
-    await query('UPDATE vendors SET store_code = $1, onboarding_step = $2 WHERE id = $3', [code, 'sheet_link', vendor.id]);
+    await query('UPDATE vendors SET store_code = $1, onboarding_step = $2 WHERE id = $3', [code, 'category', vendor.id]);
     await sendWithDelay(sock, jid,
-      `*${code}* is yours! ✅\n\nYour store link:\nwa.me/${VENDBOT_NUMBER.replace(/\D/g, '')}?text=${code}\n\nShare your *Google Sheet link* — or reply *SKIP* to add products via WhatsApp later.`
+      `*${code}* is yours! ✅\n\nQuick questions so the bot can represent you properly:\n\n*What do you sell?* Pick the closest:\n` +
+      `1 — Fashion & clothing\n2 — Food & drinks\n3 — Electronics & gadgets\n4 — Beauty & skincare\n5 — Home & furniture\n6 — Other (tell me in one sentence)`
+    );
+    return true;
+  }
+
+  if (step === 'category') {
+    const raw = (text || '').trim();
+    const num = raw === '6' || /^6\s*[.)]?\s*$/i.test(raw) ? 6 : parseInt(raw, 10);
+    const categoryMap = { 1: 'Fashion & clothing', 2: 'Food & drinks', 3: 'Electronics & gadgets', 4: 'Beauty & skincare', 5: 'Home & furniture' };
+    if (num === 6) {
+      await query('UPDATE vendors SET onboarding_step = $1 WHERE id = $2', ['category_other', vendor.id]);
+      await sendWithDelay(sock, jid, `Describe what you sell in one sentence — e.g. "Handmade jewellery and accessories" or "Phone repairs and accessories".`);
+      return true;
+    }
+    if (categoryMap[num]) {
+      await query('UPDATE vendors SET category = $1, onboarding_step = $2 WHERE id = $3', [categoryMap[num], 'location', vendor.id]);
+      await sendWithDelay(sock, jid,
+        `Got it — ${categoryMap[num]} 👍\n\n` +
+        `If you ever change what you sell, you can update this later with: TYPE\n\n` +
+        `*Where are you based?* Just the city or area — e.g. Lagos Island, Abuja, Kano`
+      );
+      return true;
+    }
+    await sendWithDelay(sock, jid, `Reply with a number 1–6.`);
+    return true;
+  }
+
+  if (step === 'category_other') {
+    const desc = (text || '').trim();
+    if (!desc) return true;
+    await query('UPDATE vendors SET category = $1, onboarding_step = $2 WHERE id = $3', [desc.slice(0, 200), 'location', vendor.id]);
+    await sendWithDelay(sock, jid,
+      `Nice — we'll use that 👍\n\n` +
+      `If you ever change what you sell, you can update this later with: TYPE\n\n` +
+      `*Where are you based?* Just the city or area — e.g. Lagos Island, Abuja, Kano`
+    );
+    return true;
+  }
+
+  if (step === 'location') {
+    const loc = (text || '').trim().slice(0, 200);
+    if (!loc) return true;
+    await query('UPDATE vendors SET location = $1, onboarding_step = $2 WHERE id = $3', [loc, 'delivery_coverage', vendor.id]);
+    await sendWithDelay(sock, jid,
+      `*Do you deliver?*\n1 — Yes, anywhere in Nigeria\n2 — Only in my city\n3 — Pickup only\n4 — Depends on the order`
+    );
+    return true;
+  }
+
+  if (step === 'delivery_coverage') {
+    const n = (text || '').trim().replace(/\s*[.)]\s*$/, '');
+    const map = { '1': 'nationwide', '2': 'local', '3': 'pickup', '4': 'depends' };
+    const val = map[n] || map[String(parseInt(n, 10))];
+    if (!val) {
+      await sendWithDelay(sock, jid, `Reply 1, 2, 3, or 4.`);
+      return true;
+    }
+    await query('UPDATE vendors SET delivery_coverage = $1, onboarding_step = $2 WHERE id = $3', [val, 'turnaround', vendor.id]);
+    await sendWithDelay(sock, jid,
+      `*How quickly do you typically deliver or prepare an order?*\n1 — Same day\n2 — 1–2 days\n3 — 3–5 days\n4 — Made to order (tell me how long)`
+    );
+    return true;
+  }
+
+  if (step === 'turnaround') {
+    const n = (text || '').trim();
+    const map = { '1': 'Same day', '2': '1–2 days', '3': '3–5 days' };
+    let turnaroundText = map[n] || null;
+    if (n === '4' || /^4\s*[.)]?\s*$/i.test(n)) {
+      await query('UPDATE vendors SET onboarding_step = $1 WHERE id = $2', ['turnaround_other', vendor.id]);
+      await sendWithDelay(sock, jid, `How long does a typical made-to-order item take? e.g. "5–7 days" or "2 weeks"`);
+      return true;
+    }
+    if (!turnaroundText) {
+      await sendWithDelay(sock, jid, `Reply 1, 2, 3, or 4.`);
+      return true;
+    }
+    await query('UPDATE vendors SET turnaround = $1, onboarding_step = $2 WHERE id = $3', [turnaroundText, 'tone', vendor.id]);
+    await sendWithDelay(sock, jid,
+      `*How do you want your store assistant to sound?*\n1 — Professional and formal\n2 — Friendly and conversational\n3 — Playful and fun\n4 — Mix of English and Pidgin`
+    );
+    return true;
+  }
+
+  if (step === 'turnaround_other') {
+    const t = (text || '').trim().slice(0, 100);
+    if (!t) return true;
+    await query('UPDATE vendors SET turnaround = $1, onboarding_step = $2 WHERE id = $3', [t, 'tone', vendor.id]);
+    await sendWithDelay(sock, jid,
+      `*How do you want your store assistant to sound?*\n1 — Professional and formal\n2 — Friendly and conversational\n3 — Playful and fun\n4 — Mix of English and Pidgin`
+    );
+    return true;
+  }
+
+  if (step === 'tone') {
+    const n = (text || '').trim();
+    const map = { '1': 'professional', '2': 'friendly', '3': 'playful', '4': 'pidgin' };
+    const toneVal = map[n] || null;
+    if (!toneVal) {
+      await sendWithDelay(sock, jid, `Reply 1, 2, 3, or 4.`);
+      return true;
+    }
+    await query('UPDATE vendors SET tone = $1, onboarding_step = $2 WHERE id = $3', [toneVal, 'custom_note', vendor.id]);
+    await sendWithDelay(sock, jid,
+      `*Is there anything important you want buyers to know before they order?*\nE.g. "All items available immediately", "Custom orders take 5 days", "We don't do returns".\n\nReply with one short sentence or *SKIP*.`
+    );
+    return true;
+  }
+
+  if (step === 'custom_note') {
+    const note = (text || '').trim().toUpperCase() === 'SKIP' ? '' : (text || '').trim().slice(0, 300);
+    await query('UPDATE vendors SET custom_note = $1, onboarding_step = $2 WHERE id = $3', [note || null, 'sheet_link', vendor.id]);
+    await sendWithDelay(sock, jid,
+      `All set 👍\n\nShare your *Google Sheet link* — or reply *SKIP* to add products via WhatsApp later.`
     );
     return true;
   }

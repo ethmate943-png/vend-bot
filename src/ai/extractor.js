@@ -16,7 +16,7 @@ const model = process.env.KIMI_MODEL || 'moonshotai/kimi-k2.5';
  * Returns array of { name, sku, price, quantity, category, image_url? }.
  */
 async function extractInventoryFromText(text) {
-  if (!kimi || !text || !text.trim()) return [];
+  if (!text || !text.trim()) return [];
 
   const systemPrompt = [
     '## TASK',
@@ -41,17 +41,64 @@ async function extractInventoryFromText(text) {
     'Output: [{"name":"Sneakers","sku":"SNEAKERS","price":20000,"quantity":2,"category":"","image_url":"https://example.com/shoe.jpg"}]'
   ].join('\n');
 
-  const res = await kimi.chat.completions.create({
-    model,
-    max_tokens: 500,
-    temperature: 0.1,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: text.trim() }
-    ]
-  });
+  const input = text.trim();
+  const useKimi = !!kimi;
+  const useGroq = !!groq;
+  let raw = '';
 
-  const raw = res.choices[0].message.content || '';
+  try {
+    if (useKimi) {
+      const res = await kimi.chat.completions.create({
+        model,
+        max_tokens: 500,
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: input }
+        ]
+      });
+      raw = res.choices[0].message.content || '';
+    } else if (useGroq) {
+      const res = await groq.chat.completions.create({
+        model: process.env.GROQ_MODEL || process.env.GROQ_MODEL_SMART || 'llama-3.1-8b-instant',
+        max_tokens: 500,
+        temperature: 0.1,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: input }
+        ]
+      });
+      raw = res.choices[0].message.content || '';
+    } else {
+      return [];
+    }
+  } catch (e) {
+    const status = e?.status || e?.response?.status;
+    const detail = e?.response?.data || e?.message || e;
+    const is404 = status === 404 || e?.response?.status === 404 || String(detail || '').includes('404');
+
+    if (useKimi && useGroq && is404) {
+      console.warn('[EXTRACTOR] Kimi 404 in inventory extractor, falling back to Groq');
+      try {
+        const res = await groq.chat.completions.create({
+          model: process.env.GROQ_MODEL || process.env.GROQ_MODEL_SMART || 'llama-3.1-8b-instant',
+          max_tokens: 500,
+          temperature: 0.1,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: input }
+          ]
+        });
+        raw = res.choices[0].message.content || '';
+      } catch (groqErr) {
+        console.error('[EXTRACTOR] Groq inventory extractor failed:', groqErr?.message || groqErr);
+        return [];
+      }
+    } else {
+      console.error('[EXTRACTOR] Kimi inventory call failed:', status || '', detail);
+      return [];
+    }
+  }
   try {
     const cleaned = raw.replace(/```json|```/g, '').trim();
     const arr = JSON.parse(cleaned);

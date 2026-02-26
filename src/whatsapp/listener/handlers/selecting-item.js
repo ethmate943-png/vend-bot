@@ -11,7 +11,7 @@ const {
 } = require('../../../ai/human-phrases');
 const { sendWithDelay, sendListMessage, sendImageWithCaption } = require('../../sender');
 const { logReply } = require('../logger');
-const { upsertSession, appendMessage, clearSession } = require('../../../sessions/manager');
+const { upsertSession, appendMessage, clearSession, appendConversationExchange } = require('../../../sessions/manager');
 const { handlePurchase } = require('./purchase');
 
 async function handleSelectingItem(ctx) {
@@ -37,6 +37,7 @@ async function handleSelectingItem(ctx) {
     await sendWithDelay(sock, buyerJid, reply);
     logReply(reply);
     await appendMessage(buyerJid, vendor.id, 'bot', reply);
+    await appendConversationExchange(buyerJid, vendor.id, text, reply);
     return true;
   }
   if (listIntent === 'WANT_LIST_AGAIN' && currentList.length > 0) {
@@ -56,11 +57,13 @@ async function handleSelectingItem(ctx) {
         logReply(out);
         await appendMessage(buyerJid, vendor.id, 'bot', 'Out of stock.');
       } else {
-        const reply = await generateReply(text, inventory, vendor.business_name, history, {});
-        if (item.image_url) await sendImageWithCaption(sock, buyerJid, item.image_url, reply);
+        const reply = await generateReply(text, inventory, vendor, history, session);
+        const caption = item.description ? `${reply}\n\n${item.description}` : reply;
+        if (item.image_url) await sendImageWithCaption(sock, buyerJid, item.image_url, caption);
         else await sendWithDelay(sock, buyerJid, reply);
         logReply(reply);
         await appendMessage(buyerJid, vendor.id, 'bot', reply);
+        await appendConversationExchange(buyerJid, vendor.id, text, reply);
         await upsertSession(buyerJid, vendor.id, { intent_state: 'querying', last_item_name: item.name, last_item_sku: item.sku, last_item_price: item.price, last_item_price_quoted_at: new Date().toISOString() });
       }
       return true;
@@ -72,10 +75,11 @@ async function handleSelectingItem(ctx) {
       await appendMessage(buyerJid, vendor.id, 'bot', '[List]');
       return true;
     }
-    const reply = await generateCatalogReply(text, inventory, vendor.business_name, history);
+    const reply = await generateCatalogReply(text, inventory, vendor, history, session);
     await sendWithDelay(sock, buyerJid, reply);
     logReply(reply);
     await appendMessage(buyerJid, vendor.id, 'bot', reply);
+    await appendConversationExchange(buyerJid, vendor.id, text, reply);
     return true;
   }
 

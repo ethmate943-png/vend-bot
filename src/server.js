@@ -8,7 +8,13 @@ const { getReceiptData } = require('./payments/receipt-data');
 const { getState } = require('./whatsapp/qr-store');
 const { query } = require('./db');
 
+const path = require('path');
+const fs = require('fs');
 const app = express();
+
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir));
 
 app.use('/webhook/paystack', express.raw({ type: 'application/json' }));
 app.use(express.json());

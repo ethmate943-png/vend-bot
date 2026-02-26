@@ -16,7 +16,7 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@neondatabase/serverless": "^1.0.2",
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "@whiskeysockets/baileys": "^6.6.0",
     "axios": "^1.13.5",
     "baileys_helpers": "^1.0.16",
     "dotenv": "^17.3.1",

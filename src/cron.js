@@ -5,6 +5,7 @@ const { getDuePayouts, hasOpenDispute } = require('./safety/escrow');
 const { runContentAgent } = require('./agents/content');
 const { runAbandonmentAgent } = require('./agents/abandonment');
 const { runPricingAgent } = require('./agents/pricing');
+const { runVendorTierGraduation, runDemotionChecks } = require('./verified-vendor');
 
 function getSock() {
   return require('./whatsapp/client').getSock();
@@ -98,7 +99,7 @@ function startCronJobs() {
     }
   });
 
-  // Midnight UTC daily — graduate eligible standard vendors to verified
+  // Midnight UTC daily — graduate eligible standard vendors to verified (legacy tier)
   cron.schedule('0 23 * * *', async () => {
     try {
       await query(`
@@ -115,6 +116,22 @@ function startCronJobs() {
       console.log('[CRON] Vendor graduation ran');
     } catch (err) {
       console.error('[CRON] Graduation error:', err.message);
+    }
+  });
+
+  // 1am UTC daily — verified vendor tier graduation (rising/verified/trusted/elite) then demotion
+  cron.schedule('0 1 * * *', async () => {
+    try {
+      await runVendorTierGraduation();
+      console.log('[CRON] Verified vendor tier graduation ran');
+    } catch (err) {
+      console.error('[CRON] Verified vendor graduation error:', err.message);
+    }
+    try {
+      await runDemotionChecks();
+      console.log('[CRON] Verified vendor demotion checks ran');
+    } catch (err) {
+      console.error('[CRON] Verified vendor demotion error:', err.message);
     }
   });
 

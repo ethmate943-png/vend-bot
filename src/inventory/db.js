@@ -4,22 +4,38 @@
  */
 const { query } = require('../db');
 
-async function getInventoryDb(vendorId) {
-  const res = await query(
-    `SELECT name, sku, price, quantity, category, min_price, image_url
-     FROM inventory_items WHERE vendor_id = $1 AND quantity > 0 AND name IS NOT NULL AND name != ''
-     ORDER BY name`,
-    [vendorId]
-  );
-  return (res.rows || []).map((r) => ({
+function mapRow(r) {
+  return {
     name: r.name,
     sku: r.sku || r.name,
     price: Number(r.price),
     quantity: Number(r.quantity),
     category: r.category || '',
     minPrice: r.min_price != null && r.min_price > 0 ? Number(r.min_price) : Number(r.price),
-    image_url: r.image_url || null
-  }));
+    image_url: r.image_url || null,
+    description: (r.description || '').trim() || null
+  };
+}
+
+async function getInventoryDb(vendorId) {
+  const res = await query(
+    `SELECT name, sku, price, quantity, category, min_price, image_url, description
+     FROM inventory_items WHERE vendor_id = $1 AND quantity > 0 AND name IS NOT NULL AND name != ''
+     ORDER BY name`,
+    [vendorId]
+  );
+  return (res.rows || []).map((r) => mapRow(r));
+}
+
+/** All items (including out-of-stock) for search, price, image. */
+async function getInventoryDbAll(vendorId) {
+  const res = await query(
+    `SELECT name, sku, price, quantity, category, min_price, image_url, description
+     FROM inventory_items WHERE vendor_id = $1 AND name IS NOT NULL AND name != ''
+     ORDER BY name`,
+    [vendorId]
+  );
+  return (res.rows || []).map((r) => mapRow(r));
 }
 
 async function addItemsDb(vendorId, items) {
@@ -70,6 +86,17 @@ async function updateItemQtyDb(vendorId, sku, newQty) {
   return qty;
 }
 
+async function updateItemPriceDb(vendorId, sku, newPrice) {
+  const price = Math.max(0, Math.floor(Number(newPrice)));
+  const res = await query(
+    `UPDATE inventory_items SET price = $3, updated_at = NOW() WHERE vendor_id = $1 AND sku = $2 RETURNING id, price`,
+    [vendorId, sku, price]
+  );
+  const row = res.rows && res.rows[0];
+  if (!row) throw new Error(`SKU not found: ${sku}`);
+  return Number(row.price);
+}
+
 /** Set or clear image_url for an item. */
 async function setItemImageDb(vendorId, sku, imageUrl) {
   const url = (imageUrl || '').trim() || null;
@@ -79,10 +106,23 @@ async function setItemImageDb(vendorId, sku, imageUrl) {
   );
 }
 
+/** Set or clear description/specs for an item. */
+async function setItemDescriptionDb(vendorId, sku, description) {
+  const text = (description || '').trim() || null;
+  const res = await query(
+    `UPDATE inventory_items SET description = $3, updated_at = NOW() WHERE vendor_id = $1 AND sku = $2 RETURNING id`,
+    [vendorId, sku, text]
+  );
+  if (!res.rows || res.rows.length === 0) throw new Error(`SKU not found: ${sku}`);
+}
+
 module.exports = {
   getInventoryDb,
+  getInventoryDbAll,
   addItemsDb,
   decrementQtyDb,
   updateItemQtyDb,
-  setItemImageDb
+  updateItemPriceDb,
+  setItemImageDb,
+  setItemDescriptionDb
 };

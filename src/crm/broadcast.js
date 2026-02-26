@@ -17,7 +17,9 @@ async function broadcastToAllBuyers(vendorId, message, vendor) {
   const rows = res.rows || [];
   if (!rows.length) return { sent: 0 };
 
-  const storeLink = vendor && vendor.store_code ? `wa.me/${VENDBOT_NUMBER}?text=${vendor.store_code}` : '';
+  const storeLink = vendor && vendor.store_code
+    ? `wa.me/${VENDBOT_NUMBER}?text=${encodeURIComponent(`${vendor.store_code} hi`)}`
+    : '';
   const fullMessage = storeLink ? `${message}\n\nShop now: ${storeLink}` : message;
   let sent = 0;
 

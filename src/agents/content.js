@@ -55,7 +55,9 @@ async function runContentAgent() {
       } catch (_) {
         content = { status: raw.slice(0, 100), instagram: '' };
       }
-      const storeLink = vendor.store_code ? `wa.me/${VENDBOT_NUMBER}?text=${vendor.store_code}` : '';
+      const storeLink = vendor.store_code
+        ? `wa.me/${VENDBOT_NUMBER}?text=${encodeURIComponent(`${vendor.store_code} hi`)}`
+        : '';
       const status = (content.status || '').replace('[LINK]', storeLink);
       const instagram = content.instagram || '';
 

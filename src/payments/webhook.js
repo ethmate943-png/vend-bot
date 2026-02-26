@@ -1,7 +1,21 @@
 const { query } = require('../db');
 const { decrementQty } = require('../inventory/manager');
 const { sendWithDelay } = require('../whatsapp/sender');
+const { queuePendingReceipt } = require('./receipt-data');
 const { upsertBuyerAndRelationship, checkAndFlagVip } = require('../crm/manager');
+const {
+  isBuyerTrustedVendor,
+  addBuyerTrustedVendor,
+  updateRelationshipScore,
+  countCompletedOrdersWithVendor,
+  isMutuallyTrusted,
+  getRelationshipTrustLevel,
+  getHoldReductionMultiplier
+} = require('../trust/manager');
+const {
+  getTierHoldMultiplier,
+  getVendorBadgeLine
+} = require('../verified-vendor');
 
 function getSock() {
   return require('../whatsapp/client').getSock();
@@ -107,7 +121,9 @@ async function handlePaymentSuccess(data) {
 
   const txnRes = await query(
     `SELECT t.*, v.whatsapp_number, v.business_name, v.total_transactions,
-            v.sheet_id, v.sheet_tab, v.id as vid, v.store_code
+            v.sheet_id, v.sheet_tab, v.id as vid, v.store_code,
+            v.verified_vendor_tier, v.created_at AS vendor_created_at,
+            (SELECT COUNT(*)::int FROM disputes d WHERE d.vendor_id = t.vendor_id) AS vendor_dispute_count
      FROM transactions t
      JOIN vendors v ON v.id = t.vendor_id
      WHERE t.mono_ref = $1 LIMIT 1`,
@@ -127,14 +143,28 @@ async function handlePaymentSuccess(data) {
   }
 
   if (!sock) {
-    console.error('[PAYMENT] Cannot send receipt: WhatsApp not connected (sock is null). Receipt not sent for ref:', reference);
+    console.error('[PAYMENT] Cannot send receipt now: WhatsApp not connected (sock is null). Queueing for retry for ref:', reference);
+    queuePendingReceipt(reference, receiptNumber);
   }
 
   const isEstablished = txn.total_transactions >= Number(process.env.ESTABLISHED_VENDOR_MIN_TRANSACTIONS);
-  const holdHours = isEstablished
+  let baseHoldHours = isEstablished
     ? Number(process.env.ESCROW_HOLD_ESTABLISHED_HOURS)
     : Number(process.env.ESCROW_HOLD_NEW_VENDOR_HOURS);
-  const releaseAt = new Date(Date.now() + holdHours * 3_600_000).toISOString();
+  const mutualTrust = await isMutuallyTrusted(txn.buyer_jid, txn.vendor_id);
+  if (mutualTrust) {
+    baseHoldHours = 2;
+  } else {
+    const trustLevel = await getRelationshipTrustLevel(txn.vendor_id, txn.buyer_jid);
+    const mult = getHoldReductionMultiplier(trustLevel);
+    baseHoldHours = Math.ceil(baseHoldHours * mult);
+  }
+  const tierMult = getTierHoldMultiplier(txn.verified_vendor_tier);
+  baseHoldHours = tierMult === 0 ? 0 : Math.ceil(baseHoldHours * tierMult);
+  const holdHours = Math.max(0, baseHoldHours);
+  const releaseAt = holdHours === 0
+    ? new Date().toISOString()
+    : new Date(Date.now() + holdHours * 3_600_000).toISOString();
 
   await query(
     `UPDATE transactions SET status = 'paid', escrow_release_at = $1 WHERE id = $2`,
@@ -153,7 +183,18 @@ async function handlePaymentSuccess(data) {
 
   try {
     const vendorRef = { id: txn.vendor_id, sheet_id: txn.sheet_id, sheet_tab: txn.sheet_tab };
-    await decrementQty(vendorRef, txn.item_sku);
+    const cartItems = txn.cart_items_json ? (() => { try { return JSON.parse(txn.cart_items_json); } catch { return null; } })() : null;
+    if (cartItems && Array.isArray(cartItems)) {
+      for (const line of cartItems) {
+        const sku = line.sku;
+        const qty = Math.max(0, Math.floor(Number(line.quantity) || 1));
+        for (let i = 0; i < qty; i++) {
+          await decrementQty(vendorRef, sku);
+        }
+      }
+    } else {
+      await decrementQty(vendorRef, txn.item_sku);
+    }
     await query('UPDATE transactions SET sheet_row_updated = true WHERE id = $1', [txn.id]);
   } catch (e) {
     console.error('[INVENTORY UPDATE ERROR]', e.message);
@@ -179,8 +220,18 @@ async function handlePaymentSuccess(data) {
       : '';
 
     const storeLine = txn.store_code
-      ? `\n_Shop more: wa.me/${(process.env.VENDBOT_NUMBER || '').replace(/\D/g, '')}?text=${txn.store_code}_\n`
+      ? `\n_Shop more: wa.me/${(process.env.VENDBOT_NUMBER || '').replace(/\D/g, '')}?text=${encodeURIComponent(`${txn.store_code} hi`)}_\n`
       : '';
+    const badgeLine = getVendorBadgeLine({
+      verified_vendor_tier: txn.verified_vendor_tier,
+      total_transactions: (txn.total_transactions || 0) + 1,
+      vendor_dispute_count: txn.vendor_dispute_count,
+      vendor_created_at: txn.vendor_created_at
+    });
+    const protectionLine = badgeLine
+      ? badgeLine
+      : `\n\n_Your funds are held in escrow for ${holdHours} hours. ` +
+        `Issue? Contact wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER || ''}_`;
     const receiptText =
       `✅ *Payment confirmed!*\n\n` +
       `You just copped from *${txn.business_name}*\n\n` +
@@ -190,8 +241,7 @@ async function handlePaymentSuccess(data) {
       receiptLink +
       visualReceiptLine +
       storeLine +
-      `\n_Your funds are held in escrow for ${holdHours} hours. ` +
-      `Issue? Contact wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER || ''}_`;
+      protectionLine;
 
     try {
       await sendWithDelay(sock, txn.buyer_jid, receiptText);
@@ -229,16 +279,19 @@ async function handlePaymentSuccess(data) {
       console.error('[PAYMENT] VIP check error:', err.message);
     }
 
-    // Delivery check after 3 hours
-    setTimeout(async () => {
-      try {
-        await sendWithDelay(sock, txn.buyer_jid,
-          `Hi! Did you receive your *${txn.item_name}* from *${txn.business_name}*?\n\nReply *YES* ✅ or *NO* ❌`
-        );
-      } catch (err) {
-        console.error('[DELIVERY PING ERROR]', err.message);
-      }
-    }, 3 * 60 * 60 * 1000);
+    // Delivery check after 3 hours — skip if elite vendor or buyer has marked this vendor as trusted
+    const skipPing = (txn.verified_vendor_tier === 'elite') || (await isBuyerTrustedVendor(txn.buyer_jid, txn.vendor_id));
+    if (!skipPing) {
+      setTimeout(async () => {
+        try {
+          await sendWithDelay(sock, txn.buyer_jid,
+            `Hi! Did you receive your *${txn.item_name}* from *${txn.business_name}*?\n\nReply *YES* ✅ or *NO* ❌`
+          );
+        } catch (err) {
+          console.error('[DELIVERY PING ERROR]', err.message);
+        }
+      }, 3 * 60 * 60 * 1000);
+    }
   } else {
     console.error('[PAYMENT] WhatsApp not connected — queuing receipt for ref:', reference);
     pendingReceipts.push({ reference, receiptNumber });
@@ -247,7 +300,37 @@ async function handlePaymentSuccess(data) {
 }
 
 async function handleDeliveryReply(buyerJid, vendorId, reply) {
-  const confirmed = reply.toLowerCase().includes('yes');
+  const r = (reply || '').toLowerCase().trim();
+  const isTrust = r === 'trust';
+  const isSkip = r === 'skip';
+
+  if (isTrust || isSkip) {
+    const txnRes = await query(
+      `SELECT t.id, t.updated_at, v.business_name FROM transactions t
+       JOIN vendors v ON v.id = t.vendor_id
+       WHERE t.buyer_jid = $1 AND t.vendor_id = $2 AND t.status = 'paid' AND t.delivery_confirmed = true
+       ORDER BY t.updated_at DESC NULLS LAST LIMIT 1`,
+      [buyerJid, vendorId]
+    );
+    const txn = txnRes.rows && txnRes.rows[0];
+    const recentlyConfirmed = txn && (Date.now() - new Date(txn.updated_at || txn.created_at || 0).getTime() < 10 * 60 * 1000);
+    if (!txn || !recentlyConfirmed) {
+      const sock = getSock();
+      if (sock && isTrust) await sendWithDelay(sock, buyerJid, 'No recent delivery to mark as trusted. Complete a delivery and confirm with YES first.');
+      return;
+    }
+    if (isTrust) {
+      const already = await isBuyerTrustedVendor(buyerJid, vendorId);
+      if (!already) {
+        await addBuyerTrustedVendor(buyerJid, vendorId);
+        const sock = getSock();
+        if (sock) await sendWithDelay(sock, buyerJid, `${txn.business_name} marked as trusted ✅\nYour next orders with them will be seamless.`);
+      }
+    }
+    return;
+  }
+
+  const confirmed = r.includes('yes');
 
   const txnRes = await query(
     `SELECT * FROM transactions
@@ -260,11 +343,12 @@ async function handleDeliveryReply(buyerJid, vendorId, reply) {
   if (!txn) return;
 
   await query(
-    'UPDATE transactions SET delivery_confirmed = $1 WHERE id = $2',
+    'UPDATE transactions SET delivery_confirmed = $1, updated_at = NOW() WHERE id = $2',
     [confirmed, txn.id]
   );
 
   if (!confirmed) {
+    await updateRelationshipScore(vendorId, buyerJid, false);
     const { incrementNoCount } = require('../vendors/resolver');
     await incrementNoCount(vendorId);
     const sock = getSock();
@@ -273,6 +357,22 @@ async function handleDeliveryReply(buyerJid, vendorId, reply) {
         `Sorry to hear that. We've flagged this for review. Please contact us at wa.me/${process.env.DISPUTE_WHATSAPP_NUMBER} to raise a dispute and we will resolve it within 48 hours.`
       );
     }
+    return;
+  }
+
+  await updateRelationshipScore(vendorId, buyerJid, true);
+  const sock = getSock();
+  const completed = await countCompletedOrdersWithVendor(buyerJid, vendorId);
+  const alreadyTrusted = await isBuyerTrustedVendor(buyerJid, vendorId);
+  if (sock && completed >= 3 && !alreadyTrusted) {
+    const vRes = await query('SELECT business_name FROM vendors WHERE id = $1', [vendorId]);
+    const vendorName = (vRes.rows && vRes.rows[0] && vRes.rows[0].business_name) || 'this vendor';
+    await sendWithDelay(sock, buyerJid,
+      `Great! Payout released to the vendor ✅\n\n` +
+      `You've now completed ${completed} order(s) with them with zero issues.\n\n` +
+      `Would you like to mark them as a *trusted vendor*? Future orders will skip the delivery confirmation ping — we'll release payment automatically after the delivery window.\n\n` +
+      `Reply *TRUST* to confirm or *SKIP* to keep things as they are.`
+    );
   }
 }
 

@@ -1,10 +1,32 @@
 const { listFooter } = require('../ai/human-phrases');
 
-async function sendMessage(sock, jid, text) {
-  await sock.sendMessage(jid, { text });
+// Track IDs of messages this process sends, so we can ignore their echoes in the listener.
+const OUTGOING_TTL_MS = 60000;
+const outgoingIds = new Set();
+
+function registerOutgoingId(id) {
+  if (!id) return;
+  if (outgoingIds.has(id)) return;
+  outgoingIds.add(id);
+  setTimeout(() => outgoingIds.delete(id), OUTGOING_TTL_MS);
 }
 
-/** Send an image with optional caption (e.g. product photo). URL must be publicly reachable. */
+function isOutgoingMessageId(id) {
+  return !!id && outgoingIds.has(id);
+}
+
+async function sendMessage(sock, jid, text) {
+  const res = await sock.sendMessage(jid, { text });
+  if (res && res.key && res.key.id) {
+    registerOutgoingId(res.key.id);
+  }
+  return res;
+}
+
+/** Send an image with optional caption (e.g. product photo).
+ * imageUrl must be a direct link to the image file (e.g. .jpg, .png). The bot fetches it and
+ * sends it as image media so the buyer sees the photo, not a link. Use a direct image URL or
+ * upload photos via the vendor "send photo" flow so the stored URL is reachable. */
 async function sendImageWithCaption(sock, jid, imageUrl, caption) {
   if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('http')) {
     if (caption) await sendMessage(sock, jid, caption);
@@ -21,9 +43,20 @@ async function sendImageWithCaption(sock, jid, imageUrl, caption) {
   }
 }
 
-async function sendWithDelay(sock, jid, text, delayMs = 1000) {
+async function sendWithDelay(sock, jid, text, delayMs) {
+  const words = (text || '').trim().split(/\s+/).filter(Boolean);
+  let computedDelay = 1000;
+  if (typeof delayMs === 'number' && !Number.isNaN(delayMs)) {
+    computedDelay = delayMs;
+  } else {
+    const wordCount = words.length;
+    // Base typing time: 600ms + 120ms per word, clamped between 600ms and 2500ms.
+    computedDelay = 600 + wordCount * 120;
+    if (computedDelay < 600) computedDelay = 600;
+    if (computedDelay > 2500) computedDelay = 2500;
+  }
   await sock.sendPresenceUpdate('composing', jid);
-  await new Promise(r => setTimeout(r, delayMs));
+  await new Promise(r => setTimeout(r, computedDelay));
   await sendMessage(sock, jid, text);
   await sock.sendPresenceUpdate('paused', jid);
 }
@@ -37,8 +70,8 @@ async function sendButtons(sock, jid, text, buttons) {
 
 /**
  * Send a native WhatsApp list message: one button that opens a list; user taps a row to select.
- * Rows with image_url get an image when the template supports it; otherwise only text.
  * Row id = sku so selection gives actionable text (we resolve to item and confirm).
+ * Falls back to plain numbered text if native list fails.
  * @param {object} sock - Baileys socket
  * @param {string} jid - Chat JID
  * @param {string} bodyText - Main message text
@@ -51,45 +84,58 @@ async function sendListMessage(sock, jid, bodyText, buttonTitle, items) {
     return;
   }
   const slice = items.slice(0, 10);
-  const numberedList = slice.map((i, idx) =>
-    `${idx + 1}. ${i.name} — ₦${Number(i.price).toLocaleString()}${i.quantity != null ? ` (${i.quantity} left)` : ''}`
-  ).join('\n');
   const footer = listFooter();
-  const fullText = `${bodyText}\n\n${numberedList}\n\n_${footer}_`;
+
+  const fallback = async () => {
+    const numberedList = slice.map((i, idx) =>
+      `${idx + 1}. ${i.name} — ₦${Number(i.price).toLocaleString()}${i.quantity != null ? ` (${i.quantity} left)` : ''}`
+    ).join('\n');
+    const fullText = `${bodyText}\n\n${numberedList}\n\n_${footer}_`;
+    await sendWithDelay(sock, jid, fullText);
+  };
 
   try {
-    const { hydratedTemplate } = await import('baileys_helpers');
-    const sections = [{
-      title: 'Items',
-      rows: slice.map((i) => {
-        const row = {
-          id: i.sku,
-          title: (i.name || '').slice(0, 24),
-          description: `₦${Number(i.price).toLocaleString()} • ${i.quantity ?? '?'} left`
-        };
-        if (i.image_url && typeof i.image_url === 'string' && i.image_url.startsWith('http')) {
-          row.image_url = i.image_url;
-        }
-        return row;
-      })
-    }];
-    const firstWithImage = slice.find(i => i.image_url && i.image_url.startsWith('http'));
-    const templateOpts = {
-      text: fullText,
-      footer,
-      interactiveButtons: [{
-        name: 'single_select',
-        buttonParamsJson: JSON.stringify({ title: buttonTitle, sections })
-      }]
+    const rows = slice.map((i) => {
+      const title = `${i.name} — ₦${Number(i.price).toLocaleString()}`.slice(0, 72);
+      const description = (i.quantity != null ? `${i.quantity} left` : '').slice(0, 72);
+      return { title, description: description || undefined, rowId: String(i.sku).slice(0, 200) };
+    });
+    const listPayload = {
+      text: (bodyText || 'Pick an option').slice(0, 1024),
+      title: (bodyText || 'Options').split('\n')[0].slice(0, 60) || 'Options',
+      buttonText: (buttonTitle || 'Choose').slice(0, 20),
+      footer: footer.slice(0, 60),
+      sections: [{ rows }]
     };
-    if (firstWithImage && firstWithImage.image_url) {
-      templateOpts.headerImageUrl = firstWithImage.image_url;
+    await sock.sendPresenceUpdate('composing', jid);
+    await new Promise(r => setTimeout(r, 800));
+    const res = await sock.sendMessage(jid, listPayload);
+    if (res && res.key && res.key.id) {
+      registerOutgoingId(res.key.id);
     }
-    await hydratedTemplate(sock, jid, templateOpts);
+    await sock.sendPresenceUpdate('paused', jid);
   } catch (err) {
-    console.warn('[sender] Native list failed, falling back to text list:', err?.message || err);
-    await sendWithDelay(sock, jid, fullText);
+    console.warn('[sender] Native list failed, falling back to text:', err?.message || err);
+    await fallback();
   }
 }
 
-module.exports = { sendMessage, sendWithDelay, sendButtons, sendListMessage, sendImageWithCaption };
+/** Text quick-reply hints after a product or list (Baileys has no reliable native buttons). */
+const QUICK_REPLY_OPTIONS =
+  `_Reply:_ *Price?* · *I want this* · *Something else* · *Delivery*`;
+
+async function sendQuickReplyOptions(sock, jid, delayMs = 600) {
+  await new Promise(r => setTimeout(r, delayMs));
+  await sendMessage(sock, jid, QUICK_REPLY_OPTIONS);
+}
+
+module.exports = {
+  sendQuickReplyOptions,
+  QUICK_REPLY_OPTIONS,
+  sendMessage,
+  sendWithDelay,
+  sendButtons,
+  sendListMessage,
+  sendImageWithCaption,
+  isOutgoingMessageId
+};
