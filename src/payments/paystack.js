@@ -2,6 +2,7 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db');
 const { getTierCapMultiplier } = require('../verified-vendor');
+const { getInventory } = require('../inventory/manager');
 
 async function checkVendorCap(vendor, amountKobo) {
   if (process.env.DISABLE_VENDOR_CAP === '1' || process.env.DISABLE_VENDOR_CAP === 'true') {
@@ -44,6 +45,32 @@ async function generatePaymentLink({ amount, itemName, itemSku, buyerJid, vendor
   const vRes = await query('SELECT * FROM vendors WHERE id = $1', [vendorId]);
   const vendor = vRes.rows[0];
   if (!vendor) throw new Error('Vendor not found');
+
+  // Safety: only allow payment links for items that actually exist in the
+  // vendor's inventory (Google Sheet or DB, depending on their setup).
+  // This prevents links for products that aren't on stock records.
+  const inventory = await getInventory(vendor);
+  if (cartItems && cartItems.length > 0) {
+    const missingSkus = [];
+    for (const line of cartItems) {
+      const sku = line.sku;
+      if (!sku) continue;
+      const invItem = inventory.find(i => i.sku === sku);
+      if (!invItem) missingSkus.push(sku);
+    }
+    if (missingSkus.length > 0) {
+      const err = new Error(`Cart has items not found in inventory: ${missingSkus.join(', ')}`);
+      err.code = 'MISSING_INVENTORY';
+      throw err;
+    }
+  } else if (itemSku && itemSku !== 'CART') {
+    const invItem = inventory.find(i => i.sku === itemSku);
+    if (!invItem) {
+      const err = new Error(`Item not found in inventory: ${itemSku}`);
+      err.code = 'MISSING_INVENTORY';
+      throw err;
+    }
+  }
 
   const reservePercent = Number(vendor.reserve_percent || 10);
   const amountKobo = Math.round(Number(amount) * 100);

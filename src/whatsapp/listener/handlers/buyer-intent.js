@@ -16,13 +16,16 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
   const { sock, buyerJid, vendor, session, inventory, history, text } = ctx;
   const lowerText = (text || '').toLowerCase();
 
-  // Explicit receipt request: "receipt" or "receipt please"
+  // Explicit receipt request: any message that mentions "receipt".
   const trimmed = (text || '').trim();
-  if (/^receipts?(\s+please)?$/i.test(trimmed)) {
+  if (/\breceipts?\b/i.test(trimmed)) {
     const res = await query(
       `SELECT mono_ref, receipt_number
        FROM transactions
-       WHERE buyer_jid = $1 AND vendor_id = $2 AND status = 'paid'
+       WHERE buyer_jid = $1
+         AND vendor_id = $2
+         AND status = 'paid'
+         AND created_at >= NOW() - INTERVAL '30 minutes'
        ORDER BY created_at DESC
        LIMIT 1`,
       [buyerJid, vendor.id]
@@ -33,6 +36,7 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
       logReply('No recent paid order for receipt');
       return;
     }
+    await sendWithDelay(sock, buyerJid, "Here's the receipt for your most recent order 👇");
     await sendReceiptForReference(sock, row.mono_ref, row.receipt_number || null);
     logReply('[Receipt re-sent]');
     return;
@@ -154,7 +158,8 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
         });
       }
     } else {
-      const catalogAsk = /what\s+(do\s+you\s+)?have|what'?s?\s+in\s+stock|show\s+me\s+(what\s+you\s+have|your\s+stuff|everything)|list\s+(everything|all)|what\s+do\s+you\s+sell|your\s+products|anything\s+available|do\s+you\s+have\s+anything/i.test(text);
+      // "What else do you have (in stock)" and other broad catalog asks should show a list, not "don't have that one".
+      const catalogAsk = /what\s+(?:else\s+)?(?:do\s+you\s+)?have|what'?s?\s+in\s+stock|show\s+me\s+(what\s+you\s+have|your\s+stuff|everything)|list\s+(everything|all)|what\s+do\s+you\s+sell|your\s+products|anything\s+available|do\s+you\s+have\s+anything/i.test(text);
       const hasExplicitCommerceWords = /(price|how much|buy|order|delivery|deliver|send to|in stock|available|do you have|you have|i need|i want|cart|pay|payment|link\b)/i.test(text || '');
 
       // If there are no matches and they didn't actually ask a clear commerce question,
@@ -181,6 +186,9 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
   }
 
   if (intent === 'PURCHASE' || intent === 'CONFIRM') {
+    // Meta chat about WhatsApp tagging/flagging numbers etc. — don't over-explain, just stay quiet.
+    const metaNumberSafety = /(they\s+can\s+tag\s+it|avoid\s+that|whatsapp\s+(may|might)\s+tag|tag\s+my\s+number|flag\s+my\s+number)/i.test(text || '');
+    if (metaNumberSafety) return;
     const matches = await matchProducts(text, inventory);
     let item = matches.length === 1 ? matches[0] : null;
     if (!item && session.last_item_name) {

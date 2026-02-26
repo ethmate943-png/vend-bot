@@ -30,10 +30,15 @@ function isBareAck(text) {
  * @param {object} _session
  * @returns {{respond: boolean, override: string|null, reason?: string}}
  */
-function shouldRespond(text, _vendor, _session = {}) {
+function shouldRespond(text, _vendor, session = {}) {
   const trimmed = (text || '').trim();
   if (!trimmed) {
     return { respond: false, override: null, reason: 'empty' };
+  }
+
+  // When picking from a list, numbers 1–99 are valid selections — don't block them.
+  if (session?.intent_state === 'selecting_item' && /^\s*\d{1,2}\s*$/.test(trimmed)) {
+    return { respond: true, override: null, reason: 'list_selection' };
   }
 
   if (isBareAck(trimmed)) {

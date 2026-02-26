@@ -14,11 +14,11 @@ const REPLY_EXAMPLES = [
   },
   {
     buyer: 'How much is the bag?',
-    bot: 'The tote bag is ₦15,000. Still in stock — want me to send you the payment link?'
+    bot: 'The tote bag is ₦15,000. Still in stock — if you want to pay, reply "send link" and I\'ll share the payment link.'
   },
   {
     buyer: 'I want that one',
-    bot: 'Sure! The Black Air Force 1 is ₦25,000. I\'ll send the payment link now.'
+    bot: 'Sure! The Black Air Force 1 is ₦25,000. If you want to go ahead, reply "send link" and I\'ll send the payment link.'
   },
   {
     buyer: 'Do you have size 42?',
@@ -30,7 +30,7 @@ const REPLY_EXAMPLES = [
   },
   {
     buyer: 'That one',
-    bot: 'Got it — the Black Air Force 1 at ₦25,000. I\'ll send the payment link now.'
+    bot: 'Got it — the Black Air Force 1 at ₦25,000. If you want to pay, reply "send link" and I\'ll send the payment link.'
   },
   {
     buyer: 'How much again?',
@@ -58,11 +58,11 @@ const REPLY_EXAMPLES = [
   },
   {
     buyer: 'k',
-    bot: 'Cool — the Black Air Force 1 is ₦25,000. I\'ll send the payment link now.'
+    bot: 'Cool — the Black Air Force 1 is ₦25,000. When you\'re ready to buy, reply "send link" and I\'ll send the payment link.'
   },
   {
     buyer: 'pls send link',
-    bot: 'No wahala — sending the payment link for the Black Air Force 1 (₦25,000) now.'
+    bot: 'No wahala — here\'s the payment link for the Black Air Force 1 (₦25,000).'
   },
   {
     buyer: 'What do you have?',
@@ -136,9 +136,26 @@ function getAntiConfusionBlock() {
 /** Optional: validate model output and return a safe fallback if it looks wrong */
 function sanitizeReply(reply, vendorName) {
   if (!reply || typeof reply !== 'string') return null;
-  const r = reply.trim();
-  if (r.length > 520) return r.slice(0, 517) + '…'; // generous cap so helpful replies aren't cut
+  let r = reply.trim();
+  if (r.length > 520) r = r.slice(0, 517) + '…'; // generous cap so helpful replies aren't cut
   const lower = r.toLowerCase();
+
+  // If the model promises a payment link was sent when our flow may not actually send it,
+  // soften that to an invitation instead. This avoids "I'll send the link now" without a link.
+  const linkPromisePatterns = [
+    /i['’]ll send the payment link now/i,
+    /i will send the payment link now/i,
+    /sending the payment link now/i,
+    /payment link has been sent/i,
+    /i['’]ve sent the payment link/i
+  ];
+  if (linkPromisePatterns.some((re) => re.test(r))) {
+    r = r.replace(
+      /i['’]ll send the payment link now|i will send the payment link now|sending the payment link now|payment link has been sent|i['’]ve sent the payment link/gi,
+      'I can send you the payment link when you\'re ready — just reply "send link"'
+    );
+  }
+
   if (FORBIDDEN_PATTERNS.some(p => lower.includes(p.toLowerCase()))) {
     return `Thanks for your message! For ${vendorName}, please tell me what you're looking for (e.g. item name or "what do you have?") and I'll help.`;
   }

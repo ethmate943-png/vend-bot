@@ -79,7 +79,7 @@ async function handleInventoryCommand(text, vendor) {
     const itemName = parts[0]?.trim();
     const newQty = parseInt(parts[1]?.trim(), 10);
     if (!itemName || isNaN(newQty)) return 'Format: "restock: item name or SKU, new quantity" or "set: item, qty"';
-    const inventory = await getInventory(vendor);
+    const inventory = await getAllInventory(vendor);
     const matches = matchItems(inventory, itemName);
     if (matches.length === 0) return `Could not find "${itemName}". Try *find: ${itemName}* to search.`;
     if (matches.length > 1) return disambiguationReply(matches, itemName, 'restock: MBP14-M2, 5');

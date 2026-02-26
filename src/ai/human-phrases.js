@@ -77,9 +77,9 @@ const LIST_INTRO_PURCHASE = [
 ];
 
 const ALREADY_HAVE_LINK = [
-  'You already have a payment link for *{{itemName}}* 😊 Reply *resend* if you need it again, or use the one I sent. No stress!',
-  'Link for *{{itemName}}* was already sent — check your chat. Reply *resend* and I\'ll send it again.',
-  'We already sent you the link for *{{itemName}}*. Want it again? Just say *resend*.'
+  'You already have a payment link for *{{itemName}}* 😊 You can use that one again, or reply *resend* if you need a fresh link.',
+  'Link for *{{itemName}}* was already sent — check your chat. If you need it again, reply *resend*.',
+  'We already sent you the link for *{{itemName}}*. Use that link, or type *resend* if you want it sent again.'
 ];
 
 const PAYMENT_FAILED = [

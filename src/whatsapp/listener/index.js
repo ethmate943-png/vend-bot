@@ -1,6 +1,6 @@
 /** Main message router: extract text, resolve vendor, delegate to handlers */
 
-const { getSession, getChatHistory, appendMessage, clearSession, getConversationHistory, appendConversationExchange, setSessionRole, appendHistory } = require('../../sessions/manager');
+const { getSession, getChatHistory, appendMessage, clearSession, getConversationHistory, appendConversationExchange, setSessionRole, appendHistory, upsertSession } = require('../../sessions/manager');
 const { getVendorByBotNumber, getVendorByStoreCode } = require('../../vendors/resolver');
 const { getInventory } = require('../../inventory/manager');
 const { sendWithDelay } = require('../sender');
@@ -16,7 +16,10 @@ const { handleCartMessage } = require('./handlers/cart');
 const { handleBuyerIntent } = require('./handlers/buyer-intent');
 const { generateCancelReply } = require('../../ai/responder');
 const { handleDeliveryReply } = require('../../payments/webhook');
+const { sendReceiptForReference } = require('../../payments/receipt-data');
 const { query } = require('../../db');
+const { isDuplicate } = require('../dedup');
+const { getBuyerQueue } = require('../queue');
 
 function extractText(msg) {
   let text = (
@@ -70,10 +73,22 @@ function extractText(msg) {
 async function handleMessage(sock, msg) {
   if (!msg.message) return;
   const buyerJid = msg.key.remoteJid;
-  if (buyerJid.endsWith('@g.us')) return;
-  if (!buyerJid) return;
+  if (!buyerJid || buyerJid.endsWith('@g.us')) return;
   if (!buyerJid.endsWith('@s.whatsapp.net') && !buyerJid.endsWith('@lid')) return;
 
+  const messageId = msg.key.id;
+  if (messageId && isDuplicate(messageId)) {
+    console.log('[LISTENER] Duplicate message', messageId, '— skipping');
+    return;
+  }
+
+  const queue = getBuyerQueue(buyerJid);
+  await queue.add(async () => {
+    await handleBuyerMessage(sock, msg, buyerJid);
+  });
+}
+
+async function handleBuyerMessage(sock, msg, buyerJid) {
   const botNum = (sock.user?.id || '').split(':')[0].replace(/\D/g, '');
   const text = extractText(msg);
 
@@ -303,8 +318,39 @@ async function handleMessage(sock, msg) {
     return;
   }
 
+  // Buyer claims they've already paid: treat as a signal to look for a recent
+  // successful payment and resend the most recent receipt instead of a link.
+  const paymentDonePattern = /\b(payment\s*(made|done|completed)|i\s*(just\s*)?paid|have\s+paid|i'?ve\s+paid|paid\s+already|just\s+paid)\b/i;
+  if (paymentDonePattern.test(trimmedText)) {
+    const res = await query(
+      `SELECT mono_ref, receipt_number
+       FROM transactions
+       WHERE buyer_jid = $1
+         AND vendor_id = $2
+         AND status = 'paid'
+         AND created_at >= NOW() - INTERVAL '30 minutes'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [buyerJid, vendor.id]
+    );
+    const row = res.rows && res.rows[0];
+    if (!row) {
+      await sendWithDelay(
+        sock,
+        buyerJid,
+        'I could not find any recent paid order for this chat in the last 30 minutes. If you just paid and nothing is showing, ask the seller to confirm the reference so we can check.'
+      );
+      logReply('No recent paid order for claimed payment');
+      return;
+    }
+    await sendWithDelay(sock, buyerJid, "Here's the receipt for your most recent order 👇");
+    await sendReceiptForReference(sock, row.mono_ref, row.receipt_number || null);
+    logReply('[Receipt re-sent after claimed payment]');
+    return;
+  }
+
   if (session.intent_state === 'awaiting_payment' && session.pending_payment_ref) {
-    const resendWords = ['resend', 'link', 'send link', 'send', 'again', 'yes', 'pay', 'payment'];
+    const resendWords = ['resend', 'link', 'send link', 'send', 'again', 'yes', 'pay', 'payment', 'how', 'where', 'what', 'get', 'give'];
     if (resendWords.some(w => text.toLowerCase().includes(w))) {
       const txnRes = await query(
         'SELECT item_name, amount, mono_link, pay_token, status FROM transactions WHERE mono_ref = $1 LIMIT 1',
@@ -320,6 +366,33 @@ async function handleMessage(sock, msg) {
         return;
       }
     }
+  }
+
+  // Any message mentioning "receipt" should try to resend the most recent receipt
+  // if there's a paid transaction in this chat within the last 30 minutes.
+  const mentionsReceipt = /\breceipts?\b/i.test(trimmedText);
+  if (mentionsReceipt) {
+    const res = await query(
+      `SELECT mono_ref, receipt_number
+       FROM transactions
+       WHERE buyer_jid = $1
+         AND vendor_id = $2
+         AND status = 'paid'
+         AND created_at >= NOW() - INTERVAL '30 minutes'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [buyerJid, vendor.id]
+    );
+    const row = res.rows && res.rows[0];
+    if (!row) {
+      await sendWithDelay(sock, buyerJid, 'I could not find any recent paid order for this chat. If you just paid and nothing is showing, ask the seller to confirm the reference so we can check.');
+      logReply('No recent paid order for receipt');
+      return;
+    }
+    await sendWithDelay(sock, buyerJid, "Here's the receipt for your most recent order 👇");
+    await sendReceiptForReference(sock, row.mono_ref, row.receipt_number || null);
+    logReply('[Receipt re-sent]');
+    return;
   }
 
   if (await handleCartMessage(ctx)) return;

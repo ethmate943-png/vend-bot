@@ -1,15 +1,22 @@
 /**
- * Unified inventory: Google Sheets or Neon DB.
- * - If vendor.sheet_id is set → use Google Sheets (existing behaviour).
- * - Otherwise → use inventory_items table in Neon.
- * All functions return/accept the same item shape: { name, sku, price, quantity, category, minPrice, image_url? }.
+ * Unified inventory: Google Sheets or Neon DB. All operations are per-vendor (dynamic).
+ * For each vendor we decide once per call:
+ * - If USE_DB_INVENTORY_ONLY is set (env) → always use Neon DB.
+ * - Else if vendor.sheet_id is set → use Google Sheets for that vendor.
+ * - Otherwise → use inventory_items table in Neon for that vendor.
+ * So "add stock", restock, sold, list, etc. all go to Sheets or DB according to that vendor's setup.
+ * Same item shape everywhere: { name, sku, price, quantity, category, minPrice, image_url? }.
  */
 const sheets = require('./sheets');
 const db = require('./db');
 const { getSock } = require('../whatsapp/client');
 const { sendWithDelay } = require('../whatsapp/sender');
 
+/** When true, always use DB (live inventory); ignore vendor sheet_id. */
+const useDbOnly = /^(1|true|yes)$/i.test(String(process.env.USE_DB_INVENTORY_ONLY || '').trim());
+
 function useSheets(vendor) {
+  if (useDbOnly) return false;
   return !!(vendor && (vendor.sheet_id || vendor.sheetId));
 }
 
@@ -52,6 +59,7 @@ async function maybeNotifyLowStock(vendor, sku, newQty) {
   }
 }
 
+/** Add stock: goes to Google Sheets or DB depending on this vendor (sheet_id or not). */
 async function addItems(vendor, items) {
   if (!vendor || !items || items.length === 0) return;
   if (useSheets(vendor)) {
