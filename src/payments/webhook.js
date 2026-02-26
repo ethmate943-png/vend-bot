@@ -16,6 +16,7 @@ const {
   getTierHoldMultiplier,
   getVendorBadgeLine
 } = require('../verified-vendor');
+const { upsertSession } = require('../sessions/manager');
 
 function getSock() {
   return require('../whatsapp/client').getSock();
@@ -282,11 +283,14 @@ async function handlePaymentSuccess(data) {
     // Delivery check after 3 hours — skip if elite vendor or buyer has marked this vendor as trusted
     const skipPing = (txn.verified_vendor_tier === 'elite') || (await isBuyerTrustedVendor(txn.buyer_jid, txn.vendor_id));
     if (!skipPing) {
+      const buyerJidForPing = txn.buyer_jid;
+      const vendorIdForPing = txn.vendor_id;
       setTimeout(async () => {
         try {
-          await sendWithDelay(sock, txn.buyer_jid,
+          await sendWithDelay(sock, buyerJidForPing,
             `Hi! Did you receive your *${txn.item_name}* from *${txn.business_name}*?\n\nReply *YES* ✅ or *NO* ❌`
           );
+          await upsertSession(buyerJidForPing, vendorIdForPing, { intent_state: 'awaiting_delivery_confirm' });
         } catch (err) {
           console.error('[DELIVERY PING ERROR]', err.message);
         }
@@ -330,8 +334,12 @@ async function handleDeliveryReply(buyerJid, vendorId, reply) {
     return;
   }
 
-  const confirmed = r.includes('yes');
+  // Treat YES / received / got it / collected etc. as confirmation; NO / not yet / didn't receive as denial
+  const receivedPhrases = /\b(yes|yeah|yep|yup|received|got\s+it|collected|delivered|i'?ve?\s+received|i\s+received\s+(the\s+)?order|order\s+received|delivery\s+received)\b/i;
+  const deniedPhrases = /\b(no|nope|nah|not\s+yet|didn'?t\s+receive|have\s+not\s+received|not\s+received|never\s+got\s+it)\b/i;
+  const confirmed = receivedPhrases.test(r) && !deniedPhrases.test(r);
 
+  // Single most recent paid, not-yet-confirmed order (so we know exactly which order/item or cart)
   const txnRes = await query(
     `SELECT * FROM transactions
      WHERE buyer_jid = $1 AND vendor_id = $2 AND status = 'paid' AND delivery_confirmed IS NULL
@@ -339,13 +347,17 @@ async function handleDeliveryReply(buyerJid, vendorId, reply) {
     [buyerJid, vendorId]
   );
 
-  const txn = txnRes.rows[0];
-  if (!txn) return;
+  const txn = txnRes.rows && txnRes.rows[0];
+  if (!txn) {
+    await upsertSession(buyerJid, vendorId, { intent_state: 'idle' });
+    return;
+  }
 
   await query(
     'UPDATE transactions SET delivery_confirmed = $1, updated_at = NOW() WHERE id = $2',
     [confirmed, txn.id]
   );
+  await upsertSession(buyerJid, vendorId, { intent_state: 'idle' });
 
   if (!confirmed) {
     await updateRelationshipScore(vendorId, buyerJid, false);
@@ -362,17 +374,45 @@ async function handleDeliveryReply(buyerJid, vendorId, reply) {
 
   await updateRelationshipScore(vendorId, buyerJid, true);
   const sock = getSock();
+
+  // Notify vendor: buyer confirmed delivery for this order (we know the item from txn.item_name / cart_items_json)
+  const vRes = await query('SELECT whatsapp_number, business_name FROM vendors WHERE id = $1 LIMIT 1', [vendorId]);
+  const vendorRow = vRes.rows && vRes.rows[0];
+  const vendorJid = vendorRow && vendorRow.whatsapp_number
+    ? `${(vendorRow.whatsapp_number || '').replace(/\D/g, '')}@s.whatsapp.net`
+    : null;
+  if (sock && vendorJid) {
+    const orderLabel = txn.item_name || 'Order';
+    let vendorMsg = `✅ *Delivery confirmed*\n\nBuyer marked as received: *${orderLabel}*`;
+    if (txn.cart_items_json) {
+      try {
+        const cartItems = JSON.parse(txn.cart_items_json);
+        if (Array.isArray(cartItems) && cartItems.length) {
+          const parts = cartItems.slice(0, 10).map(i => i.sku ? `${i.sku}${i.quantity > 1 ? ` ×${i.quantity}` : ''}` : null).filter(Boolean);
+          if (parts.length) vendorMsg += `\nSKUs: ${parts.join(', ')}${cartItems.length > 10 ? '…' : ''}`;
+        }
+      } catch (_) {}
+    }
+    vendorMsg += `\n\nPayout will be released per your hold period.`;
+    await sendWithDelay(sock, vendorJid, vendorMsg);
+  }
+
   const completed = await countCompletedOrdersWithVendor(buyerJid, vendorId);
   const alreadyTrusted = await isBuyerTrustedVendor(buyerJid, vendorId);
   if (sock && completed >= 3 && !alreadyTrusted) {
-    const vRes = await query('SELECT business_name FROM vendors WHERE id = $1', [vendorId]);
-    const vendorName = (vRes.rows && vRes.rows[0] && vRes.rows[0].business_name) || 'this vendor';
+    const vendorName = (vendorRow && vendorRow.business_name) || 'this vendor';
     await sendWithDelay(sock, buyerJid,
       `Great! Payout released to the vendor ✅\n\n` +
       `You've now completed ${completed} order(s) with them with zero issues.\n\n` +
       `Would you like to mark them as a *trusted vendor*? Future orders will skip the delivery confirmation ping — we'll release payment automatically after the delivery window.\n\n` +
       `Reply *TRUST* to confirm or *SKIP* to keep things as they are.`
     );
+  } else if (sock) {
+    const cartOrder = txn.item_sku === 'CART' || (txn.item_name || '').startsWith('Cart ');
+    const buyerAck = cartOrder
+      ? `Thanks — we've marked your full order as received ✅`
+      : `Thanks — we've marked your order as received ✅`;
+    await sendWithDelay(sock, buyerJid, buyerAck);
   }
 }
 

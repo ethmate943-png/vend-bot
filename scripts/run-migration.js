@@ -83,7 +83,8 @@ const statements = [
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS role TEXT`,
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS message_count INT DEFAULT 0`,
   `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_state TEXT`,
-  `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_state_data JSONB`
+  `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_state_data JSONB`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS list_offset INTEGER DEFAULT 0`
 ];
 
 async function main() {

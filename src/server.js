@@ -503,7 +503,8 @@ app.get('/receipt/:reference', async (req, res) => {
 
       <div class="section">
         <h3>Payment</h3>
-        <div>Payment method: Online payment (Paystack)</div>
+        <div>Paid to: <strong>${escapeHtml(data.businessName)}</strong></div>
+        <div style="margin-top:0.25rem;">Payment method: Online payment (Paystack)</div>
       </div>
 
       <div class="footer">
@@ -564,7 +565,9 @@ app.get('/receipt/:reference/pdf', async (req, res) => {
 
   doc.font('Helvetica-Oblique').fontSize(8).fillColor('#4b5563').text(data.amountInWords, 36, 230, { width: doc.page.width - 72 });
 
-  doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text('Payment method: Online payment (Paystack)', 36, 248);
+  doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text('Paid to: ' + data.businessName, 36, 248);
+  doc.moveDown(0.3);
+  doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text('Payment method: Online payment (Paystack)', 36, 260);
 
   doc.moveDown(2);
   doc.fontSize(8).fillColor('#4b5563').text(

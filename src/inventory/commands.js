@@ -136,8 +136,16 @@ async function handleInventoryCommand(text, vendor) {
     const inventory = await getInventory(vendor);
     const list = filterQuery ? matchItems(inventory, filterQuery) : inventory;
     if (!list.length) {
-      if (filterQuery) return `No in-stock items match "${filterQuery}". Try *find: ${filterQuery}* to see all (including out of stock).`;
-      return 'Your inventory is empty. Send *add: name, price, qty* or say *stock help* for all commands.';
+      const emptyGuidance =
+        `There's nothing in your inventory yet. You can:\n` +
+        `• Paste your Google Sheet link to load your stock, or\n` +
+        `• Type *add: name, price, qty* to add items (e.g. *add: Black Sneakers, 25000, 5*)\n\n` +
+        `Say *stock help* for all commands.`;
+      if (filterQuery) {
+        return `No in-stock items match "${filterQuery}". Try *find: ${filterQuery}* to see all (including out of stock).\n\n` +
+          `To add something new: *add: name, price, qty* — or paste your Google Sheet link.`;
+      }
+      return emptyGuidance;
     }
     const intro = filterQuery
       ? `📦 Matching "${filterQuery}" (${list.length} in stock). Tap to view.`

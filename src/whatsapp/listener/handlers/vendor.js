@@ -113,7 +113,15 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
   }
   if (['help', 'commands', 'menu', '?'].includes((text || '').toLowerCase().trim())) {
     const { getVendorCommandsMessage } = require('../../../vendors/onboarding');
-    const reply = getVendorCommandsMessage(vendor);
+    // Refetch current store_code from DB by id (same row CODE: updates) so help always shows the latest link
+    const helpRes = await query('SELECT store_code, business_name FROM vendors WHERE id = $1 LIMIT 1', [vendor.id]);
+    const row = helpRes.rows && helpRes.rows[0] ? helpRes.rows[0] : null;
+    const vendorForHelp = {
+      ...vendor,
+      store_code: row ? (row.store_code != null ? row.store_code : '') : (vendor.store_code || ''),
+      business_name: row ? (row.business_name != null ? row.business_name : '') : (vendor.business_name || '')
+    };
+    const reply = getVendorCommandsMessage(vendorForHelp);
     await sendWithDelay(sock, vendorJid, reply);
     logReply(reply);
     return;
@@ -123,13 +131,16 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
   const upper = trimmed.toUpperCase();
   const lower = trimmed.toLowerCase();
 
-  // Vendor profile / settings overview
+  // Vendor profile / settings overview (always read latest from DB by whatsapp_number so NAME: changes show immediately)
   if (upper === 'PROFILE' || upper === 'SETTINGS') {
-    const vRes = await query(
-      'SELECT business_name, category, location, delivery_coverage, turnaround, tone, custom_note, store_code FROM vendors WHERE id = $1',
-      [vendor.id]
-    );
-    const v = vRes.rows[0] || vendor;
+    const vendorKey = (vendor.whatsapp_number || '').replace(/\D/g, '');
+    const vRes = vendorKey
+      ? await query(
+          'SELECT business_name, category, location, delivery_coverage, turnaround, tone, custom_note, store_code FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
+          [vendorKey]
+        )
+      : { rows: [] };
+    const v = (vRes.rows && vRes.rows[0]) ? vRes.rows[0] : vendor;
     const lines = [
       `📋 *Your VendBot profile*`,
       '',
@@ -189,30 +200,40 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
   }
 
   // Change business name: one self-serve change after onboarding; then admin only
-  if (upper.startsWith('NAME:')) {
-    const newName = trimmed.slice('NAME:'.length).trim().slice(0, 255);
+  // Aliases: NAME:, STORE NAME:, STORE:
+  if (upper.startsWith('NAME:') || upper.startsWith('STORE NAME:') || upper.startsWith('STORE:')) {
+    const prefixMatch = upper.match(/^(NAME:|STORE NAME:|STORE:)/);
+    const prefixLen = prefixMatch ? prefixMatch[0].length : 'NAME:'.length;
+    const newName = trimmed.slice(prefixLen).trim().slice(0, 255);
     if (!newName) {
       const reply = 'Reply with *NAME:* then your new store name (e.g. NAME: Amaka Fashion). You can change it once after setup; after that, only admin can change it.';
       await sendWithDelay(sock, vendorJid, reply);
       logReply(reply);
       return;
     }
+    // Use whatsapp_number (same key we use to resolve vendor from bot) so we always update this bot's row
+    const vendorKey = (vendor.whatsapp_number || '').replace(/\D/g, '');
+    if (!vendorKey) {
+      await sendWithDelay(sock, vendorJid, 'Could not identify this store. Contact admin.');
+      return;
+    }
     const vRes = await query(
-      'SELECT business_name_edits_used FROM vendors WHERE id = $1',
-      [vendor.id]
+      'SELECT business_name_edits_used FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
+      [vendorKey]
     );
-    const used = vRes.rows[0] && vRes.rows[0].business_name_edits_used === true;
+    const used = vRes.rows && vRes.rows[0] && vRes.rows[0].business_name_edits_used === true;
     if (used) {
       const reply = 'You’ve already used your one store-name change. For further changes, contact admin.';
       await sendWithDelay(sock, vendorJid, reply);
       logReply(reply);
       return;
     }
-    await query(
-      'UPDATE vendors SET business_name = $1, business_name_edits_used = true WHERE id = $2',
-      [newName, vendor.id]
+    const updateRes = await query(
+      'UPDATE vendors SET business_name = $1, business_name_edits_used = true WHERE whatsapp_number = $2 RETURNING id, business_name',
+      [newName, vendorKey]
     );
-    const reply = `Store name updated to *${newName}* ✅. Further changes require admin.`;
+    const updatedName = updateRes.rows && updateRes.rows[0] ? updateRes.rows[0].business_name : newName;
+    const reply = `Store name updated to *${updatedName}* ✅. Further changes require admin.`;
     await sendWithDelay(sock, vendorJid, reply);
     logReply(reply);
     return;
@@ -369,6 +390,10 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
     const buyerJid = pendingTrust.buyer_jid;
     const buyerPhone = pendingTrust.buyer_phone || buyerJid.replace(/\D/g, '');
     const amountNaira = pendingTrust.amount_kobo / 100;
+    // Use current store name from DB for payment-link messages
+    const vendorKey = (vendor.whatsapp_number || '').replace(/\D/g, '');
+    const nameRes = vendorKey ? await query('SELECT business_name FROM vendors WHERE whatsapp_number = $1 LIMIT 1', [vendorKey]) : { rows: [] };
+    const currentName = (nameRes.rows && nameRes.rows[0] && nameRes.rows[0].business_name) || vendor.business_name || 'Store';
     if (choice === '1') {
       try {
         const capCheck = await checkVendorCap(vendor, pendingTrust.amount_kobo);
@@ -378,7 +403,7 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
           logReply(reply);
           return;
         }
-        const { link, reference } = await generatePaymentLink({
+        const { link, reference, business_name: linkName } = await generatePaymentLink({
           amount: amountNaira,
           itemName: pendingTrust.item_name,
           itemSku: pendingTrust.item_sku,
@@ -386,7 +411,8 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
           vendorId: vendor.id,
           vendorPhone: vendor.whatsapp_number
         });
-        await sendWithDelay(sock, buyerJid, `${vendor.business_name}: Pay here — *${pendingTrust.item_name}* (₦${amountNaira.toLocaleString()})\n\n${link}\n\n_Link expires in 30 mins._`);
+        const nameInMsg = linkName || currentName;
+        await sendWithDelay(sock, buyerJid, `${nameInMsg}: Pay here — *${pendingTrust.item_name}* (₦${amountNaira.toLocaleString()})\n\n${link}\n\n_Link expires in 30 mins._`);
         const reply = `Payment link sent to buyer ✅`;
         await sendWithDelay(sock, vendorJid, reply);
         logReply(reply);
@@ -407,7 +433,7 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
         pendingTrust.amount_kobo,
         status
       );
-      const replyBuyer = `${vendor.business_name}: No payment link — you'll pay when you receive. Vendor will confirm when payment is collected.`;
+      const replyBuyer = `${currentName}: No payment link — you'll pay when you receive. Vendor will confirm when payment is collected.`;
       await sendWithDelay(sock, buyerJid, replyBuyer);
       logReply(replyBuyer);
       const replyVendor = `Noted. Deliver and when you've collected payment, reply: *COLLECTED: ${buyerPhone} ${amountNaira}*`;
@@ -629,13 +655,16 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
     return;
   }
 
-  // Vendor asking for store link
+  // Vendor asking for store link (use current business name from DB)
   if (/store link|shop link|whatsapp link|store url/i.test(text || '')) {
+    const vendorKey = (vendor.whatsapp_number || '').replace(/\D/g, '');
+    const nameRes = vendorKey ? await query('SELECT business_name FROM vendors WHERE whatsapp_number = $1 LIMIT 1', [vendorKey]) : { rows: [] };
+    const currentName = (nameRes.rows && nameRes.rows[0] && nameRes.rows[0].business_name) || vendor.business_name || 'Your store';
     const botNum = (VENDBOT_NUMBER || '').replace(/\D/g, '');
     const code = (vendor.store_code || '').toUpperCase();
-    const link = botNum && code ? `wa.me/${botNum}?text=${code}` : null;
+    const link = botNum && code ? `wa.me/${botNum}?text=${encodeURIComponent(code)}` : null;
     const reply = link
-      ? `Here is your store link:\n\n${link}\n\nShare it so buyers can chat with your bot directly.`
+      ? `Here is your store link for *${currentName}*:\n\n${link}\n\nShare it so buyers can chat with your bot directly.`
       : `Once your store code and VendBot number are set, I'll generate a shareable store link for you.`;
     await sendWithDelay(sock, vendorJid, reply);
     logReply(reply);

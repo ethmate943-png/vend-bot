@@ -1,5 +1,11 @@
 const { query } = require('../db');
 
+/**
+ * Resolve the vendor (store) for this bot.
+ * Mapping: one WhatsApp bot number = one vendor row.
+ * - vendors.id = UUID primary key (used in sessions, transactions, etc.)
+ * - vendors.whatsapp_number = bot's phone number (digits only); this is how we know "this number is this vendor"
+ */
 async function getVendorByBotNumber(botNumber) {
   const clean = botNumber.replace(/[^0-9]/g, '');
 

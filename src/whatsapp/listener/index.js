@@ -1,7 +1,7 @@
 /** Main message router: extract text, resolve vendor, delegate to handlers */
 
 const { getSession, getChatHistory, appendMessage, clearSession, getConversationHistory, appendConversationExchange, setSessionRole, appendHistory } = require('../../sessions/manager');
-const { getVendorByBotNumber } = require('../../vendors/resolver');
+const { getVendorByBotNumber, getVendorByStoreCode } = require('../../vendors/resolver');
 const { getInventory } = require('../../inventory/manager');
 const { sendWithDelay } = require('../sender');
 const { logReply, logMessage } = require('./logger');
@@ -106,23 +106,28 @@ async function handleMessage(sock, msg) {
       : forcedRole === 'buyer'
         ? false
         : isVendorChatBase;
+
+  // When role is forced to vendor, treat all messages in this chat as vendor messages,
+  // even if the JID is a @lid device or doesn't match vendorPhone exactly.
   const isVendorMessage =
-    isVendorChat &&
-    (
-      msg.key.fromMe ||
-      (chatPhone && chatPhone === vendorPhone)
-    );
+    (forcedRole === 'vendor')
+      ? true
+      : isVendorChat &&
+        (
+          msg.key.fromMe ||
+          (chatPhone && chatPhone === vendorPhone)
+        );
   const hasVendorVoice = isVendorMessage && (msg.message?.audioMessage || msg.message?.pttMessage);
   if (!text && !hasVendorVoice) return;
 
   // Test helper: allow toggling how this chat is treated (buyer vs vendor)
   const lowerCommand = (text || '').trim().toLowerCase();
-  if (lowerCommand === 'test:mode vendor') {
+  if (lowerCommand === 'test:mode vendor' || lowerCommand === 'test:vendor') {
     await setSessionRole(buyerJid, vendor.id, 'vendor');
     await sendWithDelay(sock, buyerJid, 'Test mode: this chat will now be treated as *vendor* messages until you switch back.');
     return;
   }
-  if (lowerCommand === 'test:mode buyer') {
+  if (lowerCommand === 'test:mode buyer' || lowerCommand === 'test:buyer') {
     await setSessionRole(buyerJid, vendor.id, 'buyer');
     await sendWithDelay(sock, buyerJid, 'Test mode: this chat will now be treated as *buyer* messages again.');
     return;
@@ -157,21 +162,34 @@ async function handleMessage(sock, msg) {
   };
   const lowerText = text.toLowerCase().trim();
 
-  // First-time / idle, non-vendor chats: treat greetings specially
+  // First-time / idle, non-vendor chats: identify vendor from store code in message, then show stock
   const isNewSession = !sessionRow || !sessionRow.intent_state || session.intent_state === 'idle';
-
-  // Buyer coming in via store link with the store code (possibly plus a short greeting):
-  // wa.me/<bot>?text=STORECODE → welcome them and show what's in stock.
-  const storeCode = (vendor.store_code || '').toUpperCase().trim();
   const upperText = trimmedText.toUpperCase();
-  const looksLikePureCode = storeCode && upperText === storeCode;
-  const looksLikeCodeWithShortExtra =
-    storeCode &&
-    upperText.includes(storeCode) &&
-    upperText.length <= storeCode.length + 10; // allow "AMAKA hi", "hi AMAKA", etc.
-  if (isNewSession && storeCode && (looksLikePureCode || looksLikeCodeWithShortExtra)) {
-    const inventory = await getInventory(vendor);
-    const name = vendor.business_name || 'this store';
+
+  // Try to identify vendor from store code in the message (e.g. "AMAKA", "hi AMAKA", "AMAKA hi")
+  const words = trimmedText.split(/\s+/).filter(Boolean);
+  let vendorForGreet = vendor;
+  for (const w of words) {
+    const code = w.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code.length >= 2) {
+      const vByCode = await getVendorByStoreCode(code);
+      if (vByCode && (vByCode.whatsapp_number || '').replace(/\D/g, '') === botNum) {
+        vendorForGreet = vByCode;
+        break;
+      }
+    }
+  }
+  const storeCodeInMessage = (vendorForGreet.store_code || '').toUpperCase().trim();
+  const messageHasStoreCode = storeCodeInMessage && upperText.includes(storeCodeInMessage);
+  const greetPattern = /^(hi+|hello+|he+y+s*|hey there|hi there|how far|sup|what'?s up|good (morning|afternoon|evening)|good day|evening|morning|i have a question|can i ask a question)\b/i;
+  const isGreeting = greetPattern.test(lowerText);
+  const looksLikeStoreCodeEntry = storeCodeInMessage && (upperText === storeCodeInMessage || (upperText.includes(storeCodeInMessage) && upperText.length <= storeCodeInMessage.length + 15));
+  const isStoreCodeWithGreeting = messageHasStoreCode && upperText.length <= (storeCodeInMessage.length + 15); // e.g. "EAZIGADGETS hi" — always show stock
+
+  // New session: greeting or store code → welcome + stock. Any session: message is store code + short greeting → show stock.
+  if ((isNewSession && (isGreeting || looksLikeStoreCodeEntry || messageHasStoreCode)) || isStoreCodeWithGreeting) {
+    const inventory = await getInventory(vendorForGreet);
+    const name = vendorForGreet.business_name || 'this store';
     if (!inventory.length) {
       const reply =
         `Welcome to *${name}* 👋\n\n` +
@@ -192,10 +210,19 @@ async function handleMessage(sock, msg) {
       `Welcome to *${name}* 👋\n\n` +
       `Here's what's in stock right now (${inventory.length} item${inventory.length === 1 ? '' : 's'}):\n\n` +
       `${list}${moreLine}\n\n` +
-      `Tell me what you're looking for or tap and mention any item.`;
+      `Reply with a number to choose (e.g. *1*–*10*), or type *11* for the next 10 items.`;
     await sendWithDelay(sock, buyerJid, reply);
     logReply(reply);
     await appendMessage(buyerJid, vendor.id, 'bot', reply);
+    if (inventory.length > 1) {
+      await upsertSession(buyerJid, vendor.id, {
+        intent_state: 'selecting_item',
+        list_skus: inventory.map(i => i.sku).join(','),
+        list_offset: 0,
+        last_item_name: null,
+        last_item_sku: null
+      });
+    }
     return;
   }
 
@@ -203,25 +230,8 @@ async function handleMessage(sock, msg) {
     const displayName = vendor.business_name && !/something went wrong on our end/i.test(vendor.business_name)
       ? vendor.business_name
       : null;
-    // Treat short greeting-ish messages ("hey", "heyy", "heys", "hi", "good evening", etc.) as a greet
-    const greetPattern = /^(hi+|hello+|he+y+s*|hey there|hi there|how far|sup|what'?s up|good (morning|afternoon|evening)|good day|evening|morning|i have a question|can i ask a question)\b/i;
     const sellChoicePattern = /^(2|sell|selling|vendor|open store|set up store|setup store|start selling)\b/i;
     const sellPhrasePattern = /(set\s*up\s+my\s+store|setup\s+my\s+store|open\s+my\s+store|start\s+my\s+store|start\s+selling\b|i\s+want\s+to\s+sell\b|become\s+a\s+vendor\b)/i;
-
-    // If they greet with no context, respond like an assistant and invite them to say what they need
-    if (greetPattern.test(lowerText)) {
-      const prompt =
-        (displayName
-          ? `Hi, I'm VendBot for *${displayName}* 👋\n\n`
-          : `Hi, I'm VendBot 👋\n\n`) +
-        `You can tell me what you want to buy from this store,\n` +
-        `or, if you want to set up *your own* store, say something like \"I want to sell\" or \"set up my store\".\n\n` +
-        `What do you need?`;
-      await sendWithDelay(sock, buyerJid, prompt);
-      logReply(prompt);
-      await appendMessage(buyerJid, vendor.id, 'bot', prompt);
-      return;
-    }
 
     // If they explicitly say they want to sell, guide them to vendor setup
     if (sellChoicePattern.test(lowerText) || sellPhrasePattern.test(lowerText)) {
@@ -282,6 +292,13 @@ async function handleMessage(sock, msg) {
   }
 
   if (session.intent_state === 'awaiting_delivery_confirm') {
+    await handleDeliveryReply(buyerJid, vendor.id, text);
+    return;
+  }
+
+  // Proactive delivery confirmation: "I've received the order", "received", "got it" etc.
+  const deliveryConfirmPattern = /\b(received|got\s+it|collected|i'?ve?\s+received|i\s+received\s+(the\s+)?order|order\s+received|delivery\s+received)\b/i;
+  if (deliveryConfirmPattern.test(trimmedText)) {
     await handleDeliveryReply(buyerJid, vendor.id, text);
     return;
   }

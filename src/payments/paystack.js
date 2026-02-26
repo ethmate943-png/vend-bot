@@ -92,8 +92,8 @@ async function generatePaymentLink({ amount, itemName, itemSku, buyerJid, vendor
     [vendorId, buyerJid, buyerPhone, itemName, itemSku, amountKobo, reference, paystackUrl, payToken, cartJson]
   );
 
-  // Return the actual Paystack payment link so the buyer can pay directly
-  return { link: paystackUrl, reference };
+  // Return the actual Paystack payment link and current business name (from the row we just loaded)
+  return { link: paystackUrl, reference, business_name: vendor.business_name || '' };
 }
 
 async function verifyTransaction(reference) {

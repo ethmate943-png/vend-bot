@@ -14,17 +14,41 @@ const { logReply } = require('../logger');
 const { upsertSession, appendMessage, clearSession, appendConversationExchange } = require('../../../sessions/manager');
 const { handlePurchase } = require('./purchase');
 
+const LIST_PAGE_SIZE = 10;
+
 async function handleSelectingItem(ctx) {
   const { sock, buyerJid, vendor, session, inventory, history, text } = ctx;
   if (session.intent_state !== 'selecting_item') return false;
 
   const listSkus = (session.list_skus || '').split(',').map(s => s.trim()).filter(Boolean);
-  const currentList = listSkus.length > 0
+  const listOffset = Math.max(0, parseInt(session.list_offset, 10) || 0);
+  const fullList = listSkus.length > 0
     ? listSkus.map(sku => inventory.find(i => i.sku === sku)).filter(Boolean)
     : inventory.filter(i => i.quantity > 0);
+  const currentList = fullList.slice(listOffset, listOffset + LIST_PAGE_SIZE);
 
-  const isNumericSelection = /^\s*(?:[1-9]|10)\s*$/.test(text.trim()) && currentList.length > 0;
-  const bySkuDirect = inventory.find((i) => i.sku === text.trim()) && currentList.some(i => i.sku === text.trim());
+  const trimmed = (text || '').trim();
+  const num = /^\s*\d+\s*$/.test(trimmed) ? parseInt(trimmed, 10) : NaN;
+
+  // "Next page": user typed 11 (or next/more) when we're showing first 10 — show next 10 items
+  const askNextPage = num === currentList.length + 1 && listOffset + currentList.length < fullList.length;
+  const askNextPageWords = /^(next|more|show\s+more)$/i.test(trimmed) && listOffset + LIST_PAGE_SIZE < fullList.length;
+  if ((askNextPage || askNextPageWords) && fullList.length > LIST_PAGE_SIZE) {
+    const nextOffset = listOffset + currentList.length;
+    const nextPage = fullList.slice(nextOffset, nextOffset + LIST_PAGE_SIZE);
+    const lines = nextPage.map((i, idx) => `${idx + 1}. ${i.name} — ₦${i.price.toLocaleString()} (${i.quantity} in stock)`).join('\n');
+    const remaining = fullList.length - (nextOffset + nextPage.length);
+    const moreLine = remaining > 0 ? `\n\n…and ${remaining} more. Reply *${nextPage.length + 1}* for the next 10.` : '';
+    const reply = `📦 *Next items*\n\n${lines}${moreLine}\n\nReply with a number to choose (1–${nextPage.length}).`;
+    await sendWithDelay(sock, buyerJid, reply);
+    logReply(reply);
+    await appendMessage(buyerJid, vendor.id, 'bot', reply);
+    await upsertSession(buyerJid, vendor.id, { list_offset: nextOffset });
+    return true;
+  }
+
+  const isNumericSelection = !isNaN(num) && num >= 1 && num <= 20 && currentList.length > 0;
+  const bySkuDirect = inventory.find((i) => i.sku === trimmed) && currentList.some(i => i.sku === trimmed);
 
   let listIntent = 'SELECT_ITEM';
   if (!isNumericSelection && !bySkuDirect) {
@@ -47,7 +71,7 @@ async function handleSelectingItem(ctx) {
     return true;
   }
   if (listIntent === 'NEW_QUESTION') {
-    await upsertSession(buyerJid, vendor.id, { intent_state: 'idle', list_skus: null });
+    await upsertSession(buyerJid, vendor.id, { intent_state: 'idle', list_skus: null, list_offset: 0 });
     const matches = await matchProducts(text, inventory);
     if (matches.length === 1) {
       const item = matches[0];
@@ -71,7 +95,7 @@ async function handleSelectingItem(ctx) {
     if (matches.length > 1) {
       await sendListMessage(sock, buyerJid, listIntroFirst(), 'Choose option', matches);
       logReply('[List]');
-      await upsertSession(buyerJid, vendor.id, { intent_state: 'selecting_item', list_skus: matches.map(m => m.sku).join(','), last_item_name: null, last_item_sku: null });
+      await upsertSession(buyerJid, vendor.id, { intent_state: 'selecting_item', list_skus: matches.map(m => m.sku).join(','), list_offset: 0, last_item_name: null, last_item_sku: null });
       await appendMessage(buyerJid, vendor.id, 'bot', '[List]');
       return true;
     }
@@ -94,8 +118,7 @@ async function handleSelectingItem(ctx) {
     }
     return true;
   }
-  const num = parseInt(text.trim(), 10);
-  if (num >= 1 && num <= currentList.length) {
+  if (!isNaN(num) && num >= 1 && num <= currentList.length) {
     const item = currentList[num - 1];
     if (item.quantity < 1) {
       await sendWithDelay(sock, buyerJid, outOfStock());

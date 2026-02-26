@@ -225,25 +225,48 @@ async function handleOnboarding(sock, jid, text, vendor) {
   }
 
   if (step === 'bank_name') {
-    const bankCode = resolveBankCode(text.trim());
+    const raw = (text || '').trim();
+    if (!raw) return true;
+    const bankCode = resolveBankCode(raw);
     if (!bankCode) {
+      const q = raw.toLowerCase().replace(/bank/g, '').trim();
+      const knownBanks = ['GTBank', 'Access Bank', 'Zenith Bank', 'First Bank', 'UBA', 'Fidelity', 'Sterling', 'Opay', 'Palmpay', 'Kuda', 'Moniepoint', 'Wema', 'FCMB'];
+      const matches = q
+        ? knownBanks.filter(name => name.toLowerCase().replace(/bank/g, '').includes(q)).slice(0, 5)
+        : knownBanks.slice(0, 7);
+      const suggestions = matches.length
+        ? `\n\nBanks I know that look close:\n- ${matches.join('\n- ')}`
+        : `\n\nSupported examples include: GTBank, Access, Zenith, Opay, Palmpay, Kuda, FCMB.`;
       await sendWithDelay(sock, jid,
-        `I don't recognise that bank. Try again.\nExamples: GTBank, Access, Zenith, Opay, Palmpay, Kuda`
+        `I don't recognise that bank name yet.\n\nPlease type the *exact* bank name you use (e.g. "GTBank", "Access Bank", "Kuda").` +
+        suggestions
       );
       return true;
     }
     await query(
       'UPDATE vendors SET bank_name = $1, bank_code = $2, onboarding_step = $3 WHERE id = $4',
-      [text.trim(), bankCode, 'account_number', vendor.id]
+      [raw, bankCode, 'account_number', vendor.id]
     );
-    await sendWithDelay(sock, jid, `Got it — ${text.trim()} ✅\n\nWhat is your account number?`);
+    await sendWithDelay(sock, jid, `Got it — ${raw} ✅\n\nWhat is your account number?`);
     return true;
   }
 
   if (step === 'account_number') {
-    const num = (text || '').trim().replace(/[^0-9]/g, '');
+    const raw = (text || '').trim();
+    const upper = raw.toUpperCase();
+
+    // Allow vendor to jump back and change bank if they realise it's wrong.
+    if (upper === 'BANK' || upper === 'CHANGE BANK') {
+      await query('UPDATE vendors SET onboarding_step = $1 WHERE id = $2', ['bank_name', vendor.id]);
+      await sendWithDelay(sock, jid, `No wahala — let's fix it.\n\nWhat *bank* do you use for receiving payments?`);
+      return true;
+    }
+
+    const num = raw.replace(/[^0-9]/g, '');
     if (num.length !== 10) {
-      await sendWithDelay(sock, jid, `Nigerian account numbers are 10 digits. Please check and try again.`);
+      await sendWithDelay(sock, jid,
+        `Nigerian account numbers are 10 digits.\n\nIf you picked the *wrong bank*, reply *BANK* to change it.\nIf the bank is correct, please type the correct 10-digit account number.`
+      );
       return true;
     }
     const v = await query('SELECT bank_code FROM vendors WHERE id = $1', [vendor.id]);
@@ -262,7 +285,9 @@ async function handleOnboarding(sock, jid, text, vendor) {
         `Account found ✅\n\nName: *${accountName}*\n\nIs this correct? Reply YES or NO`
       );
     } catch (e) {
-      await sendWithDelay(sock, jid, `Could not verify that account. Please check the number and try again.`);
+      await sendWithDelay(sock, jid,
+        `Could not verify that account.\n\nIf you think the *bank is wrong*, reply *BANK* to change it.\nOtherwise, please check the account number and try again.`
+      );
     }
     return true;
   }

@@ -155,6 +155,14 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
       }
     } else {
       const catalogAsk = /what\s+(do\s+you\s+)?have|what'?s?\s+in\s+stock|show\s+me\s+(what\s+you\s+have|your\s+stuff|everything)|list\s+(everything|all)|what\s+do\s+you\s+sell|your\s+products|anything\s+available|do\s+you\s+have\s+anything/i.test(text);
+      const hasExplicitCommerceWords = /(price|how much|buy|order|delivery|deliver|send to|in stock|available|do you have|you have|i need|i want|cart|pay|payment|link\b)/i.test(text || '');
+
+      // If there are no matches and they didn't actually ask a clear commerce question,
+      // stay silent instead of sending a generic "no match".
+      if (!catalogAsk && !hasExplicitCommerceWords) {
+        return;
+      }
+
       const reply = catalogAsk
         ? await generateCatalogReply(text, inventory, vendor, history)
         : noMatch();

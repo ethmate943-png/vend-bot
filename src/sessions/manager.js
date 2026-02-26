@@ -38,7 +38,7 @@ async function setSessionRole(buyerJid, vendorId, role) {
 
 async function clearSession(buyerJid, vendorId) {
   await query(
-    `UPDATE sessions SET intent_state = 'idle', pending_payment_ref = NULL, last_item_sku = NULL, last_item_name = NULL, list_skus = NULL, conversation_history = '[]' WHERE buyer_jid = $1 AND vendor_id = $2`,
+    `UPDATE sessions SET intent_state = 'idle', pending_payment_ref = NULL, last_item_sku = NULL, last_item_name = NULL, list_skus = NULL, list_offset = 0, conversation_history = '[]' WHERE buyer_jid = $1 AND vendor_id = $2`,
     [buyerJid, vendorId]
   );
 }
