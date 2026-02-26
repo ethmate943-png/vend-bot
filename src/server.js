@@ -264,67 +264,257 @@ app.get('/receipt/:reference', async (req, res) => {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Payment Receipt - ${escapeHtml(data.reference)}</title>
+  <title>Order Confirmed - ${escapeHtml(data.reference)}</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 1.5rem; background: #e8e8e8; }
-    .receipt { max-width: 420px; margin: 0 auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,.12); overflow: hidden; }
-    .head { background: #075E54; color: #fff; padding: 1.5rem 1.5rem; text-align: center; }
-    .head h1 { margin: 0; font-size: 1.1rem; font-weight: 600; letter-spacing: 0.02em; }
-    .head .sub { margin: 0.4rem 0 0; font-size: 0.75rem; opacity: .92; text-transform: uppercase; letter-spacing: 0.08em; }
-    .body { padding: 1.5rem 1.5rem 1.25rem; }
-    .receipt-title { text-align: center; font-size: 0.85rem; font-weight: 700; color: #333; margin-bottom: 1.25rem; letter-spacing: 0.03em; }
-    .row { display: flex; justify-content: space-between; align-items: flex-start; padding: 0.5rem 0; border-bottom: 1px solid #eee; gap: 1rem; }
-    .row:last-of-type { border-bottom: none; }
-    .label { color: #666; font-size: 0.875rem; flex-shrink: 0; }
-    .value { font-weight: 600; color: #222; text-align: right; font-size: 0.9rem; }
-    .total-row { margin-top: 1rem; padding-top: 1rem; border-top: 2px solid #075E54; font-size: 1.15rem; }
-    .total-row .value { color: #075E54; font-size: 1.2rem; }
-    .amount-words { font-size: 0.8rem; color: #555; font-style: italic; margin-top: 0.35rem; }
-    .footer-note { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px dashed #ddd; font-size: 0.8rem; color: #777; text-align: center; line-height: 1.45; }
-    .payment-method { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
-    .actions { padding: 1rem 1.5rem; background: #f7f7f7; text-align: center; border-top: 1px solid #eee; }
-    .btn { display: inline-block; padding: 0.6rem 1.25rem; background: #25D366; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 0 0.35rem; font-size: 0.9rem; }
-    .btn:hover { background: #20bd5a; }
-    .btn.secondary { background: #075E54; }
-    .btn.secondary:hover { background: #064a43; }
-    @media print { body { background: #fff; padding: 0; } .receipt { box-shadow: none; } .actions { display: none; } }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #111827;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 2rem 1.25rem;
+    }
+    .page {
+      width: 100%;
+      max-width: 900px;
+      background: #ffffff;
+      display: flex;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 22px 60px rgba(15,23,42,0.35);
+    }
+    .hero {
+      flex: 0 0 34%;
+      background: radial-gradient(circle at top left, #111827 0, #020617 60%, #000000 100%);
+      position: relative;
+      color: #f9fafb;
+      padding: 1.75rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .hero-top-label {
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      opacity: 0.8;
+    }
+    .hero-product {
+      margin-top: 4rem;
+      font-size: 1.35rem;
+      font-weight: 600;
+    }
+    .hero-store {
+      margin-top: 0.35rem;
+      font-size: 0.8rem;
+      opacity: 0.85;
+    }
+    .hero-ref {
+      margin-top: 3rem;
+      font-size: 0.72rem;
+      opacity: 0.7;
+    }
+    .hero-ref span {
+      display: block;
+      margin-top: 0.15rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+    .content {
+      flex: 1;
+      padding: 1.75rem 2rem 1.75rem;
+    }
+    .content-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1.6rem;
+      font-size: 0.8rem;
+      color: #6b7280;
+    }
+    .content-header-right {
+      text-align: right;
+    }
+    .order-title {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin: 0 0 0.4rem;
+      color: #111827;
+    }
+    .order-subtitle {
+      font-size: 0.9rem;
+      color: #4b5563;
+      margin: 0;
+    }
+    .section {
+      margin-top: 1.6rem;
+      font-size: 0.86rem;
+      color: #111827;
+    }
+    .section h3 {
+      margin: 0 0 0.6rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #9ca3af;
+    }
+    .item-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 0 0.2rem;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .item-main {
+      font-weight: 600;
+    }
+    .item-sub {
+      font-size: 0.8rem;
+      color: #6b7280;
+    }
+    .amounts {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      row-gap: 0.35rem;
+      column-gap: 1.5rem;
+      margin-top: 0.6rem;
+      font-size: 0.8rem;
+      color: #4b5563;
+    }
+    .amounts div:last-child {
+      font-weight: 600;
+      color: #111827;
+    }
+    .amounts .total-label {
+      margin-top: 0.25rem;
+      font-weight: 600;
+      color: #111827;
+    }
+    .amounts .total-value {
+      margin-top: 0.25rem;
+      font-weight: 700;
+      color: #111827;
+    }
+    .amount-words {
+      margin-top: 0.5rem;
+      font-size: 0.78rem;
+      color: #6b7280;
+      font-style: italic;
+    }
+    .footer {
+      margin-top: 1.8rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      row-gap: 0.75rem;
+      font-size: 0.78rem;
+      color: #6b7280;
+    }
+    .actions {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-block;
+      padding: 0.55rem 1.2rem;
+      border-radius: 999px;
+      border: none;
+      text-decoration: none;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.18s ease, transform 0.1s ease, color 0.18s ease;
+    }
+    .btn-primary {
+      background: #111827;
+      color: #f9fafb;
+    }
+    .btn-primary:hover {
+      background: #020617;
+      transform: translateY(-1px);
+    }
+    .btn-ghost {
+      background: transparent;
+      color: #111827;
+    }
+    .btn-ghost:hover {
+      background: #f3f4f6;
+    }
+    @media (max-width: 768px) {
+      body { padding: 1.5rem 0.75rem; }
+      .page { flex-direction: column; max-width: 100%; }
+      .hero { flex-basis: auto; min-height: 160px; }
+      .hero-product { margin-top: 2.5rem; }
+    }
+    @media print {
+      body { background: #ffffff; padding: 0; align-items: flex-start; }
+      .page { box-shadow: none; border-radius: 0; max-width: 100%; }
+      .actions { display: none; }
+    }
   </style>
 </head>
 <body>
-  <div class="receipt">
-    <div class="head">
-      <h1>${escapeHtml(data.businessName)}</h1>
-      <p class="sub">Official Payment Receipt</p>
-    </div>
-    <div class="body">
-      <p class="receipt-title">OFFICIAL PAYMENT RECEIPT</p>
-      <div class="row">
-        <span class="label">Receipt No.</span>
-        <span class="value">${escapeHtml(data.reference)}</span>
+  <div class="page">
+    <div class="hero">
+      <div>
+        <div class="hero-top-label">HEY!</div>
+        <div class="hero-product">${escapeHtml(data.itemName)}</div>
+        <div class="hero-store">${escapeHtml(data.businessName)}</div>
       </div>
-      <div class="row">
-        <span class="label">Date &amp; Time</span>
-        <span class="value">${escapeHtml(data.date)}</span>
-      </div>
-      <div class="row">
-        <span class="label">Description</span>
-        <span class="value">${escapeHtml(data.itemName)}</span>
-      </div>
-      <div class="row total-row">
-        <span class="label">Amount Paid</span>
-        <span class="value">${escapeHtml(data.amountFormatted)}</span>
-      </div>
-      <div class="amount-words">${escapeHtml(data.amountInWords)}</div>
-      <p class="payment-method">Payment method: Paystack</p>
-      <div class="footer-note">
-        Thank you for your purchase. This receipt confirms your payment. Keep it for your records.<br>
-        <strong>${escapeHtml(data.businessName)}</strong> will contact you to arrange delivery.
+      <div class="hero-ref">
+        Order reference
+        <span>${escapeHtml(data.reference)}</span>
       </div>
     </div>
-    <div class="actions">
-      <a href="${pdfUrl}" class="btn" download>Download PDF</a>
-      <a href="javascript:window.print()" class="btn secondary">Print</a>
+    <div class="content">
+      <div class="content-header">
+        <div></div>
+        <div class="content-header-right">
+          <div>${escapeHtml(data.date)}</div>
+          <div>Order #${escapeHtml(data.reference)}</div>
+        </div>
+      </div>
+      <h1 class="order-title">Order confirmed!</h1>
+      <p class="order-subtitle">
+        Your payment has been received. <strong>${escapeHtml(data.businessName)}</strong> will contact you to arrange delivery.
+      </p>
+
+      <div class="section">
+        <h3>Item</h3>
+        <div class="item-row">
+          <div>
+            <div class="item-main">${escapeHtml(data.itemName)}</div>
+          </div>
+          <div>₦${Number(data.amount / 100).toLocaleString('en-NG')}</div>
+        </div>
+
+        <div class="amounts">
+          <div>Subtotal</div><div>${escapeHtml(data.amountFormatted)}</div>
+          <div class="total-label">Total</div><div class="total-value">${escapeHtml(data.amountFormatted)}</div>
+        </div>
+        <div class="amount-words">${escapeHtml(data.amountInWords)}</div>
+      </div>
+
+      <div class="section">
+        <h3>Payment</h3>
+        <div>Payment method: Online payment (Paystack)</div>
+      </div>
+
+      <div class="footer">
+        <div>
+          This receipt is for your records. Keep your order reference safe.
+        </div>
+        <div class="actions">
+          <a href="${pdfUrl}" class="btn btn-primary" download>Download PDF receipt</a>
+          <a href="javascript:window.print()" class="btn btn-ghost">Print</a>
+        </div>
+      </div>
     </div>
   </div>
 </body>
@@ -345,30 +535,43 @@ app.get('/receipt/:reference/pdf', async (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="receipt-${data.reference}.pdf"`);
   doc.pipe(res);
 
-  doc.fontSize(16).fillColor('#075E54').text(data.businessName, { align: 'center' });
-  doc.moveDown(0.35);
-  doc.fontSize(9).fillColor('#333').text('OFFICIAL PAYMENT RECEIPT', { align: 'center' });
-  doc.moveDown(1.2);
+  // Header block
+  doc.roundedRect(36, 40, doc.page.width - 72, 80, 16)
+    .fillAndStroke('#111827', '#111827');
+  doc.fillColor('#22c55e').fontSize(22).text('✓', 0, 58, { align: 'center' });
+  doc.fillColor('#e5e7eb').fontSize(12).text('Payment Success', 0, 84, { align: 'center' });
+  doc.fontSize(9).fillColor('#9ca3af').text(data.businessName, 0, 100, { align: 'center' });
 
-  doc.fontSize(9).fillColor('#666');
-  doc.text('Receipt No.: ', { continued: true }).fillColor('#222').text(data.reference);
-  doc.moveDown(0.5);
-  doc.fillColor('#666').text('Date & Time: ', { continued: true }).fillColor('#222').text(data.date);
-  doc.moveDown(0.5);
-  doc.fillColor('#666').text('Description: ', { continued: true }).fillColor('#222').text(data.itemName);
-  doc.moveDown(0.5);
-  doc.fillColor('#666').text('Amount Paid: ', { continued: true }).fillColor('#075E54').fontSize(12).text(data.amountFormatted);
-  doc.moveDown(0.3);
-  doc.fontSize(8).fillColor('#555').font('Helvetica-Oblique').text(data.amountInWords);
-  doc.font('Helvetica');
-  doc.moveDown(0.5);
-  doc.fontSize(8).fillColor('#666').text('Payment method: Paystack');
-  doc.moveDown(1);
+  doc.moveTo(36, 132).lineTo(doc.page.width - 36, 132).dash(3, { space: 3 }).strokeColor('#e5e7eb').stroke().undash();
 
-  doc.fontSize(8).fillColor('#777').text(
-    'Thank you for your purchase. This receipt confirms your payment. ' +
-    data.businessName + ' will contact you to arrange delivery.',
-    { align: 'center', width: doc.page.width - 72 }
+  doc.moveDown(2);
+
+  // Body
+  doc.font('Helvetica').fontSize(9).fillColor('#6b7280');
+  doc.text('Reference number', 36, 140);
+  doc.font('Helvetica-Bold').fillColor('#111827').text(data.reference, 0, 140, { align: 'right', width: doc.page.width - 72 });
+
+  doc.font('Helvetica').fillColor('#6b7280').text('Date & time', 36, 158);
+  doc.font('Helvetica-Bold').fillColor('#111827').text(data.date, 0, 158, { align: 'right', width: doc.page.width - 72 });
+
+  doc.font('Helvetica').fillColor('#6b7280').text('Item', 36, 176);
+  doc.font('Helvetica-Bold').fillColor('#111827').text(data.itemName, 0, 176, { align: 'right', width: doc.page.width - 72 });
+
+  doc.moveTo(36, 200).lineTo(doc.page.width - 36, 200).strokeColor('#e5e7eb').stroke();
+
+  doc.font('Helvetica').fillColor('#6b7280').text('Total', 36, 210);
+  doc.font('Helvetica-Bold').fillColor('#16a34a').fontSize(12).text(data.amountFormatted, 0, 208, { align: 'right', width: doc.page.width - 72 });
+
+  doc.font('Helvetica-Oblique').fontSize(8).fillColor('#4b5563').text(data.amountInWords, 36, 230, { width: doc.page.width - 72 });
+
+  doc.font('Helvetica').fontSize(8).fillColor('#6b7280').text('Payment method: Online payment (Paystack)', 36, 248);
+
+  doc.moveDown(2);
+  doc.fontSize(8).fillColor('#4b5563').text(
+    'This confirms your payment. ' + data.businessName + ' will contact you to arrange delivery.',
+    36,
+    268,
+    { width: doc.page.width - 72, align: 'center' }
   );
 
   doc.end();

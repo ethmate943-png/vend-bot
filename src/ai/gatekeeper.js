@@ -6,90 +6,42 @@ function hasCommerceSignal(text) {
   return COMMERCE_SIGNALS.some(sig => lower.includes(sig));
 }
 
-function isSingleEmojiOrChar(text) {
-  const trimmed = (text || '').trim();
-  if (!trimmed) return false;
-  if (trimmed.length === 1) return true;
-  // crude emoji-only check
-  return /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/u.test(trimmed);
-}
-
-function isBareAck(text) {
-  const lower = (text || '').trim().toLowerCase();
-  if (!lower) return false;
-  if (['ok', 'k', 'kk', 'okay', 'sure', 'yes', 'yup', 'yeah', 'yep', 'thanks', 'thank you', 'tnx', 'thx'].includes(lower)) {
-    return true;
-  }
-  return isSingleEmojiOrChar(text);
-}
-
-function isGreetingOnly(text) {
-  const lower = (text || '').trim().toLowerCase();
-  if (!lower) return false;
-  return /^(hi+|hello+|he+y+s*|hey there|hi there|how far|sup|what'?s up|good (morning|afternoon|evening)|good day|evening|morning)$/.test(lower);
-}
-
-function isIdentityQuestion(text) {
-  const lower = (text || '').trim().toLowerCase();
-  if (!lower) return false;
-  return /(who (are|r) (you|u)|what (is|\'s) this|what can you do|wetin you (be|do)|who be this)/i.test(lower);
-}
-
 /**
- * Decide whether to respond at all, and optionally provide an override message.
- * - When commerce signals are present → always respond, no override.
- * - For first message, we may override with a welcome or intro.
- * - For pure acks/emoji-only with no context → can skip.
+ * Decide whether to respond at all.
+ * Hard rule: only respond to messages that clearly look like commerce
+ * (price, buy, pay, order, delivery, stock, help/menu/options, etc.).
+ * Everything else (pure chat, jokes, meta talk) is ignored completely.
  *
  * @param {string} text
- * @param {object} vendor
- * @param {object} session
+ * @param {object} _vendor
+ * @param {object} _session
  * @returns {{respond: boolean, override: string|null, reason?: string}}
  */
-function shouldRespond(text, vendor, session = {}) {
+function shouldRespond(text, _vendor, _session = {}) {
   const trimmed = (text || '').trim();
   if (!trimmed) {
     return { respond: false, override: null, reason: 'empty' };
   }
 
   const lower = trimmed.toLowerCase();
-  const messageCount = Number(session.message_count || 0);
-  const name = vendor && vendor.business_name ? vendor.business_name : 'this store';
 
-  // Anything with clear commerce signal should go through as-is.
+  // Strong commerce keywords (including help/menu/options as commands).
   if (hasCommerceSignal(trimmed)) {
     return { respond: true, override: null, reason: 'commerce_signal' };
   }
 
-  // Active conversation (we've seen at least one message before).
-  if (messageCount > 0) {
-    if (isBareAck(trimmed)) {
-      return { respond: false, override: null, reason: 'bare_ack' };
-    }
-    return { respond: true, override: null, reason: 'active_conversation' };
+  const commercePattern = /(do you have|have any|looking for|want to buy|i want (to )?buy|i wan buy|how much|price|amount|delivery|deliver|send to|in stock|available|order|place an order|pay now|payment|paystack|cart|add to cart)/i;
+  if (commercePattern.test(lower)) {
+    return { respond: true, override: null, reason: 'commerce_phrase' };
   }
 
-  // Fresh conversation (first message in this session).
-  if (isGreetingOnly(trimmed)) {
-    const welcome =
-      `Hi, this is the assistant for *${name}*.\n` +
-      `Tell me what you want to buy or ask about, and I'll help.`;
-    return { respond: true, override: welcome, reason: 'greeting' };
+  const commandPattern = /^(help|menu|options|cancel|reset|cart|view cart)\b/i;
+  if (commandPattern.test(lower)) {
+    return { respond: true, override: null, reason: 'command' };
   }
 
-  if (isIdentityQuestion(trimmed)) {
-    const intro =
-      `I'm the WhatsApp assistant for *${name}*.\n` +
-      `I help with questions about products, prices and orders.`;
-    return { respond: true, override: intro, reason: 'identity' };
-  }
-
-  if (isBareAck(trimmed)) {
-    return { respond: false, override: null, reason: 'fresh_ack' };
-  }
-
-  // Short ambiguous messages with no commerce: let the AI decide; we pass through.
-  return { respond: true, override: null, reason: 'default' };
+  // Everything else is treated as normal conversation; bot stays silent.
+  return { respond: false, override: null, reason: 'non_commerce' };
 }
 
 module.exports = { shouldRespond };
