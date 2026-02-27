@@ -72,9 +72,9 @@
         <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-4xl h-[600px] bg-[#25D366]/10 blur-[150px] rounded-full pointer-events-none"></div>
         <div class="max-w-5xl mx-auto text-center relative z-10">
             <div class="reveal-up mb-6">
-                <div class="inline-flex items-center gap-3 px-5 py-2 text-xs uppercase tracking-[0.25em] bg-[#25D366] text-black rounded-full shadow-[0_0_40px_rgba(37,211,102,0.3)]">
-                    <span class="flex h-1.5 w-1.5 rounded-full bg-black/80 animate-pulse"></span>
-                    No website. No app. No setup.
+                <div class="inline-flex items-center gap-3 px-5 py-2 text-xs uppercase tracking-[0.25em] bg-[#25D366] text-black font-medium rounded-full shadow-[0_0_40px_rgba(37,211,102,0.3)] [color:black]">
+                    <span class="flex h-1.5 w-1.5 rounded-full bg-black animate-pulse"></span>
+                    <span class="text-black">No website. No app. No setup.</span>
                 </div>
             </div>
 
@@ -102,6 +102,27 @@
                     </button>
                 </form>
                 <p class="text-xs uppercase tracking-widest text-neutral-500 mt-6">Free to start. We earn when you do.</p>
+            </div>
+
+            <!-- Step 2a: Already registered (in progress or complete) -->
+            <div id="step-2-already" class="landing-step mt-14 max-w-lg mx-auto relative">
+                <div class="bg-[#0a0a0a] border border-[#25D366]/30 p-8 rounded-none">
+                    <p id="already-title" class="text-[#25D366] font-medium mb-2">You're already registered</p>
+                    <p id="already-subtitle" class="text-neutral-400 mb-4">This number has a store. Continue setup in WhatsApp or open your store link.</p>
+                    <div class="space-y-2 mb-4 text-left">
+                        <p class="text-sm"><span class="text-neutral-500">Store name:</span> <strong id="already-name" class="text-white">—</strong></p>
+                        <p class="text-sm"><span class="text-neutral-500">Store code:</span> <strong id="already-code" class="text-[#25D366]">—</strong></p>
+                        <div id="already-missing-wrap" class="text-sm text-amber-400/90 hidden">
+                            <span class="text-neutral-500">Still to complete in the bot:</span>
+                            <ul id="already-missing-list" class="list-disc list-inside mt-1"></ul>
+                        </div>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <a id="btn-continue-setup" href="#" target="_blank" rel="noopener noreferrer" class="group flex-1 bg-[#25D366] text-black font-medium rounded-none py-4 px-6 text-center hover:bg-white transition-all flex items-center justify-center gap-2">Continue setup in WhatsApp</a>
+                        <a id="btn-open-store" href="#" target="_blank" rel="noopener noreferrer" class="group flex-1 bg-white/10 border border-white/20 text-white font-medium rounded-none py-4 px-6 text-center hover:bg-white/20 transition-all flex items-center justify-center gap-2">Open store link</a>
+                    </div>
+                </div>
+                <button type="button" id="back-from-already" class="text-sm text-neutral-500 hover:text-white mt-4 underline">← Use a different number</button>
             </div>
 
             <!-- Step 2: Store name -->
@@ -135,21 +156,21 @@
             </div>
         </div>
 
-        <div class="max-w-full overflow-hidden mt-32 pt-12 border-t border-white/10 relative reveal-up delay-300">
-            <div class="absolute inset-y-0 left-0 w-32 bg-gradient-to-r from-[#050505] to-transparent z-10"></div>
-            <div class="absolute inset-y-0 right-0 w-32 bg-gradient-to-l from-[#050505] to-transparent z-10"></div>
+        <div class="max-w-full overflow-hidden mt-12 pt-16 pb-16 border-t border-black/10 relative reveal-up delay-300 bg-[#25D366]">
+            <div class="absolute inset-y-0 left-0 w-32 bg-gradient-to-r from-[#25D366] to-transparent z-10"></div>
+            <div class="absolute inset-y-0 right-0 w-32 bg-gradient-to-l from-[#25D366] to-transparent z-10"></div>
             <div class="animate-marquee">
                 <div class="flex items-center justify-around w-full shrink-0">
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:lock-password-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Secured Payments</div>
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:box-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Automated Tracking</div>
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:banknote-2-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Instant Payouts</div>
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> 24/7 AI Assistant</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:lock-password-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> Secured Payments</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:box-minimalistic-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> Automated Tracking</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:banknote-2-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> Instant Payouts</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> 24/7 AI Assistant</div>
                 </div>
                 <div class="flex items-center justify-around w-full shrink-0">
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:lock-password-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Secured Payments</div>
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:box-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Automated Tracking</div>
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:banknote-2-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Instant Payouts</div>
-                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> 24/7 AI Assistant</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:lock-password-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> Secured Payments</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:box-minimalistic-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> Automated Tracking</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:banknote-2-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> Instant Payouts</div>
+                    <div class="flex items-center gap-4 text-2xl md:text-5xl tracking-tight text-black font-host font-medium"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-3xl md:text-5xl text-black" stroke-width="1.5"></iconify-icon> 24/7 AI Assistant</div>
                 </div>
             </div>
         </div>
@@ -171,7 +192,7 @@
                         <div class="relative bg-[#050505] p-8 md:p-10 bento-card">
                             <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
                                 <div class="max-w-md text-left">
-                                    <h3 class="font-host text-2xl md:text-3xl font-medium tracking-tight text-white mb-3">
+                                    <h3 class="font-host text-2xl md:text-5xl font-medium tracking-tight text-white mb-3">
                                         Set up in under a minute
                                     </h3>
                                     <p class="text-base text-neutral-400 font-light leading-relaxed">
@@ -212,7 +233,7 @@
                             <div class="flex flex-col gap-6">
                                 <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                                     <div>
-                                        <h3 class="font-host text-2xl md:text-3xl font-medium tracking-tight text-white mb-2">
+                                        <h3 class="font-host text-2xl md:text-5xl font-medium tracking-tight text-white mb-2">
                                             Sell forever, even while you sleep
                                         </h3>
                                         <p class="text-base text-neutral-400 font-light leading-relaxed max-w-xl">
@@ -363,7 +384,7 @@
         <div class="max-w-4xl mx-auto text-center relative z-10 reveal-up">
             <span class="inline-block py-1.5 px-4 bg-white/5 border border-white/10 text-xs uppercase tracking-widest text-neutral-300 mb-8">Consumer Protection</span>
             <h2 class="font-host text-5xl md:text-7xl font-medium tracking-tighter text-white mb-10 leading-[0.95]">Shop verified vendors. <br>Pay safely.</h2>
-            <p class="text-lg md:text-xl text-neutral-400 max-w-2xl mx-auto mb-16 font-light">Every store on MoovMart is verified. Your payment is held securely until your order arrives. No fake vendors. No disappeared sellers.</p>
+            <p class="text-lg md:text-5xl text-neutral-400 max-w-2xl mx-auto mb-16 font-light">Every store on MoovMart is verified. Your payment is held securely until your order arrives. No fake vendors. No disappeared sellers.</p>
             <div class="bg-[#0a0a0a] border border-white/15 p-2 max-w-2xl mx-auto flex items-center shadow-2xl focus-within:border-white/40 transition-colors">
                 <iconify-icon icon="solar:magnifer-linear" class="text-2xl text-neutral-500 ml-4"></iconify-icon>
                 <input type="text" placeholder="Find a store by name or code..." class="w-full bg-transparent py-4 px-5 text-lg text-white placeholder-neutral-600 focus:outline-none" readonly>
@@ -426,7 +447,7 @@
                 <h2 class="font-host text-5xl md:text-7xl font-medium tracking-tighter text-white mb-8 leading-[0.95]">
                     Free to start.<br>We only earn when you do.
                 </h2>
-                <p class="text-lg md:text-xl text-neutral-400 font-light max-w-2xl mx-auto">
+                <p class="text-lg md:text-5xl text-neutral-400 font-light max-w-2xl mx-auto">
                     No monthly fees. No setup cost. No hidden charges. MoovMart only takes a small commission on completed sales.
                 </p>
             </div>
@@ -540,6 +561,7 @@
         (function () {
             var step1 = document.getElementById('step-1');
             var step2 = document.getElementById('step-2');
+            var step2Already = document.getElementById('step-2-already');
             var step3 = document.getElementById('step-3');
             var formNumber = document.getElementById('form-number');
             var formStorename = document.getElementById('form-storename');
@@ -549,21 +571,63 @@
             var btnSetup = document.getElementById('btn-setup');
             var btnWhatsapp = document.getElementById('btn-whatsapp');
             var backToStep1 = document.getElementById('back-to-step1');
+            var backFromAlready = document.getElementById('back-from-already');
             var startOver = document.getElementById('start-over');
 
             function showStep(step) {
-                step1.classList.remove('active'); step2.classList.remove('active'); step3.classList.remove('active');
+                step1.classList.remove('active'); step2.classList.remove('active'); step2Already.classList.remove('active'); step3.classList.remove('active');
                 if (step === 1) step1.classList.add('active');
                 else if (step === 2) step2.classList.add('active');
+                else if (step === '2-already') step2Already.classList.add('active');
                 else if (step === 3) step3.classList.add('active');
             }
 
             formNumber.addEventListener('submit', function (e) {
                 e.preventDefault();
-                if (!inputPhone.value.trim()) return;
-                showStep(2);
-                inputStorename.focus();
+                var phone = (inputPhone.value || '').replace(/\D/g, '');
+                if (!phone || phone.length < 10) return;
+                var submitBtn = formNumber.querySelector('button[type="submit"]');
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Checking…';
+                fetch('/api/landing/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ whatsapp_number: phone.length > 10 ? phone : '234' + phone })
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (data.registered) {
+                            var complete = data.setup_complete === true;
+                            document.getElementById('already-title').textContent = complete ? "You're all set" : "You're already registered";
+                            document.getElementById('already-subtitle').textContent = complete
+                                ? "Your store is ready. Open WhatsApp to manage it or share your store link with buyers."
+                                : "This number has a store. Continue setup in WhatsApp or open your store link.";
+                            document.getElementById('already-name').textContent = data.business_name || '—';
+                            document.getElementById('already-code').textContent = data.store_code || '—';
+                            var missingWrap = document.getElementById('already-missing-wrap');
+                            var missingList = document.getElementById('already-missing-list');
+                            if (data.missing && data.missing.length) {
+                                missingWrap.classList.remove('hidden');
+                                missingList.innerHTML = data.missing.map(function (m) { return '<li>' + m + '</li>'; }).join('');
+                            } else {
+                                missingWrap.classList.add('hidden');
+                                missingList.innerHTML = '';
+                            }
+                            var btnSetup = document.getElementById('btn-continue-setup');
+                            btnSetup.href = data.setup_link || '#';
+                            btnSetup.textContent = complete ? 'Open in WhatsApp' : 'Continue setup in WhatsApp';
+                            document.getElementById('btn-open-store').href = data.whatsapp_link || '#';
+                            showStep('2-already');
+                        } else {
+                            showStep(2);
+                            inputStorename.focus();
+                        }
+                    })
+                    .catch(function () { showStep(2); inputStorename.focus(); })
+                    .finally(function () { submitBtn.disabled = false; submitBtn.textContent = 'Get Link \u2192'; });
             });
+
+            backFromAlready.addEventListener('click', function () { showStep(1); });
 
             formStorename.addEventListener('submit', function (e) {
                 e.preventDefault();

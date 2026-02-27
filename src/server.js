@@ -175,6 +175,67 @@ async function findAvailableStoreCode(candidates, excludeVendorId) {
   return normalizeStoreCode(base);
 }
 
+// Check if a number is already registered; return vendor state and links so they can continue setup.
+function onboardingStepLabel(step) {
+  if (!step || step === 'complete') return null;
+  const labels = {
+    start: 'Business name & store code',
+    business_name: 'Business name',
+    store_code: 'Store code',
+    category: 'Category (what you sell)',
+    category_other: 'Category description',
+    location: 'Location',
+    delivery_coverage: 'Delivery options',
+    turnaround: 'Turnaround time',
+    tone: 'Tone (professional / friendly / pidgin)',
+    custom_note: 'Short note for buyers'
+  };
+  return labels[step] || step;
+}
+
+app.post('/api/landing/check', async (req, res) => {
+  try {
+    const { whatsapp_number } = req.body || {};
+    const raw = String(whatsapp_number || '').replace(/\D/g, '');
+    const phone = raw.startsWith('234') ? raw : raw ? `234${raw}` : '';
+    if (!phone || phone.length < 10) {
+      return res.status(400).json({ error: 'Valid WhatsApp number required' });
+    }
+    const existing = await query(
+      'SELECT business_name, store_code, onboarding_step FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
+      [phone]
+    );
+    const row = existing.rows && existing.rows[0];
+    if (!row) {
+      return res.json({ registered: false });
+    }
+    const bot = (process.env.BOT_NUMBER || process.env.VENDBOT_NUMBER || '').replace(/\D/g, '');
+    const waBase = bot || phone;
+    const code = (row.store_code || '').trim();
+    const setupLink = waBase && code
+      ? `https://wa.me/${waBase}?text=${encodeURIComponent('VENDOR-SETUP ' + code)}`
+      : null;
+    const whatsappLink = waBase && code
+      ? `https://wa.me/${waBase}?text=${encodeURIComponent(code)}`
+      : null;
+    const missingLabel = onboardingStepLabel(row.onboarding_step);
+    const setupComplete = !row.onboarding_step || row.onboarding_step === 'complete';
+    return res.json({
+      registered: true,
+      setup_complete: setupComplete,
+      business_name: row.business_name || null,
+      store_code: code || null,
+      onboarding_step: row.onboarding_step || null,
+      missing: missingLabel ? [missingLabel] : [],
+      setup_link: setupLink,
+      whatsapp_link: whatsappLink
+    });
+  } catch (err) {
+    console.error('[SERVER] /api/landing/check error:', err.message);
+    res.status(500).json({ error: 'Check failed. Try again.' });
+  }
+});
+
 // Landing registration: create/update vendor by number + business name, return store code and links.
 app.post('/api/landing/register', async (req, res) => {
   try {
@@ -230,10 +291,9 @@ app.post('/api/landing/register', async (req, res) => {
     }
     const text = encodeURIComponent(storeCode);
     res.json({
+      business_name: name,
       store_code: storeCode,
-      // Buyer-facing link: they send the store code to browse and buy
       whatsapp_link: `https://wa.me/${waBase}?text=${text}`,
-      // Vendor-facing link: they send VENDOR-SETUP so the bot knows to continue onboarding/management
       setup_link: `https://wa.me/${waBase}?text=${encodeURIComponent('VENDOR-SETUP ' + storeCode)}`
     });
   } catch (err) {

@@ -98,7 +98,12 @@ async function handleOnboarding(sock, jid, text, vendor) {
       );
       return true;
     }
-    await sendWithDelay(sock, jid, `Reply with a number 1–6.`);
+    // Not a number (e.g. first message "VENDOR-SETUP <CODE>" from landing) — show full category list
+    const biz = (vendor.business_name || vendor.store_code || 'Your store').trim();
+    await sendWithDelay(sock, jid,
+      `Hi! *${biz}* is set up on the site — just a few quick questions so the bot can represent you well.\n\n*What do you sell?* Pick the closest:\n` +
+      `1 — Fashion & clothing\n2 — Food & drinks\n3 — Electronics & gadgets\n4 — Beauty & skincare\n5 — Home & furniture\n6 — Other (tell me in one sentence)`
+    );
     return true;
   }
 
