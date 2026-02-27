@@ -21,7 +21,8 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
   const trimmed = (text || '').trim();
   if (/\breceipts?\b/i.test(trimmed)) {
     const res = await query(
-      `SELECT mono_ref, receipt_number
+
+      `SELECT mono_ref
        FROM transactions
        WHERE buyer_jid = $1
          AND vendor_id = $2
@@ -38,7 +39,7 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
       return;
     }
     await sendWithDelay(sock, buyerJid, "Here's the receipt for your most recent order 👇");
-    await sendReceiptForReference(sock, row.mono_ref, row.receipt_number || null);
+    await sendReceiptForReference(sock, row.mono_ref, null);
     logReply('[Receipt re-sent]');
     return;
   }

@@ -1,8 +1,8 @@
 /** Main message router: extract text, resolve vendor, delegate to handlers */
 
 const { getSession, getChatHistory, appendMessage, clearSession, getConversationHistory, appendConversationExchange, setSessionRole, appendHistory, upsertSession, getAnyActiveBuyerSession } = require('../../sessions/manager');
-const { getVendorByBotNumber, getVendorByStoreCode } = require('../../vendors/resolver');
-const { resolveIdentity } = require('../../identity/resolver');
+const { getVendorByBotNumber, getVendorByStoreCode, getVendorById } = require('../../vendors/resolver');
+const { resolveIdentity, setOnboardingSession } = require('../../identity/resolver');
 const { getBuyerDisplayNameFromMessage, extractNameFromMessage, buildGreeting } = require('../../identity/buyer');
 const { getInventory } = require('../../inventory/manager');
 const { sendWithDelay } = require('../sender');
@@ -17,12 +17,29 @@ const { handleSelectingItem } = require('./handlers/selecting-item');
 const { handleCartMessage } = require('./handlers/cart');
 const { handleBuyerIntent } = require('./handlers/buyer-intent');
 const { generateCancelReply } = require('../../ai/responder');
-const { handleDeliveryReply } = require('../../payments/webhook');
+const { handleDeliveryReply, handlePaymentSuccess } = require('../../payments/webhook');
 const { sendReceiptForReference } = require('../../payments/receipt-data');
+const { verifyTransaction } = require('../../payments/paystack');
 const { query } = require('../../db');
 const { isDuplicate } = require('../dedup');
 const { getBuyerQueue } = require('../queue');
 const { isRateLimited } = require('../../safety/ratelimit');
+
+/** Deep-search for list/button selection id anywhere in the object (Baileys/Cloud API vary). */
+function findSelectionId(o, depth = 0) {
+  if (depth > 12 || !o || typeof o !== 'object') return null;
+  const v1 = o.selectedRowId || o.selectedButtonId || o.selectedId;
+  if (typeof v1 === 'string' && v1.trim().length > 0 && v1.length < 300) return v1.trim();
+  if (typeof o.id === 'string' && o.id.trim().length > 0 && o.id.length <= 120) return o.id.trim();
+  for (const k of Object.keys(o)) {
+    if (k === 'title' || k === 'description' || k === 'key') continue;
+    if (typeof o[k] === 'object' && o[k] !== null) {
+      const found = findSelectionId(o[k], depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 function extractText(msg) {
   let text = (
@@ -44,56 +61,49 @@ function extractText(msg) {
     listReply = sub && (sub.id || sub.selectedRowId) ? (sub.id || sub.selectedRowId) : null;
   }
   if (!listReply && msg.message && typeof msg.message === 'object') {
-    const findRowId = (o, depth = 0) => {
-      if (depth > 8 || !o) return null;
-      if (typeof o.selectedRowId === 'string' && o.selectedRowId.trim()) return o.selectedRowId.trim();
-      if (typeof o.id === 'string' && o.id.trim().length < 200) return o.id.trim();
-      for (const k of Object.keys(o)) {
-        if (typeof o[k] === 'object' && o[k] !== null) {
-          const found = findRowId(o[k], depth + 1);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-    listReply = findRowId(msg.message);
-    if (!listReply && msg.message.viewOnceMessageV2?.message) listReply = findRowId(msg.message.viewOnceMessageV2.message);
-    if (!listReply && msg.message.viewOnceMessage?.message) listReply = findRowId(msg.message.viewOnceMessage.message);
+    listReply = findSelectionId(msg.message);
+    if (!listReply && msg.message.viewOnceMessageV2?.message) listReply = findSelectionId(msg.message.viewOnceMessageV2.message);
+    if (!listReply && msg.message.viewOnceMessage?.message) listReply = findSelectionId(msg.message.viewOnceMessage.message);
   }
-  const buttonReply = msg.message?.buttonsResponseMessage?.selectedButtonId;
+  if (!listReply && msg && typeof msg === 'object') {
+    listReply = findSelectionId(msg);
+  }
+  const buttonReply = msg.message?.buttonsResponseMessage?.selectedButtonId || (listReply ? null : findSelectionId(msg.message || msg));
   if (listReply) {
     text = String(listReply).trim();
     console.log('[LIST] Selected row id:', text);
   } else if (buttonReply) text = String(buttonReply).trim();
 
-  if (!text && msg.message && !msg.message.conversation && !msg.message.extendedTextMessage?.text) {
-    const keys = Object.keys(msg.message);
-    console.log('[LIST_DEBUG] List tap? Keys:', keys.join(', '));
-  }
-  return text;
+  return text || '';
 }
 
 async function handleAmbiguousVendor(sock, jid, text, vendor) {
-  const active = await getAnyActiveBuyerSession(jid);
-  if (active && active.vendor_id && active.vendor_id === vendor.id) {
-    const sessionRow = await getSession(jid, vendor.id) || {};
-    const session = { ...sessionRow, conversation_history: getConversationHistory(sessionRow) };
-    const inventory = await getInventory(vendor);
-    const history = getChatHistory(session);
-    const ctx = { sock, buyerJid: jid, vendor, session, inventory, history, text };
-    if (await handleCartMessage(ctx)) return;
-    if (await handleNegotiationReply(ctx)) return;
-    if (await handleSelectingItem(ctx)) return;
-    const intent = await classifyIntent(text, {}, [], vendor);
-    logMessage(vendor.business_name, jid, text, intent);
-    const trimmed = text.trim();
-    const vagueRef = /^(it|that\s*one?|this\s*one|the\s*(bag|one|item|first\s*one|sneakers|pair)|how\s*much|price|cost|amount|how\s*much\s*again|price\s*\?|send\s*link|pls|please)\s*[?.!]*$/i.test(trimmed)
-      || (trimmed.length <= 20 && /^(that|this|the\s*one|again)\s*[?.!]*$/i.test(trimmed));
-    const lastItemAsMatch = vagueRef && session.last_item_name
-      ? inventory.find(i => i.name === session.last_item_name)
-      : null;
-    await handleBuyerIntent(ctx, intent, lastItemAsMatch);
-    return;
+  const upper = (text || '').toUpperCase().trim();
+  const isVendorSetup = upper.startsWith('VENDOR-SETUP');
+
+  // For explicit vendor setup flows, never reuse a previous buyer session.
+  if (!isVendorSetup) {
+    const active = await getAnyActiveBuyerSession(jid);
+    if (active && active.vendor_id && active.vendor_id === vendor.id) {
+      const sessionRow = await getSession(jid, vendor.id) || {};
+      const session = { ...sessionRow, conversation_history: getConversationHistory(sessionRow) };
+      const inventory = await getInventory(vendor);
+      const history = getChatHistory(session);
+      const ctx = { sock, buyerJid: jid, vendor, session, inventory, history, text };
+      if (await handleCartMessage(ctx)) return;
+      if (await handleNegotiationReply(ctx)) return;
+      if (await handleSelectingItem(ctx)) return;
+      const intent = await classifyIntent(text, {}, [], vendor);
+      logMessage(vendor.business_name, jid, text, intent);
+      const trimmed = text.trim();
+      const vagueRef = /^(it|that\s*one?|this\s*one|the\s*(bag|one|item|first\s*one|sneakers|pair)|how\s*much|price|cost|amount|how\s*much\s*again|price\s*\?|send\s*link|pls|please)\s*[?.!]*$/i.test(trimmed)
+        || (trimmed.length <= 20 && /^(that|this|the\s*one|again)\s*[?.!]*$/i.test(trimmed));
+      const lastItemAsMatch = vagueRef && session.last_item_name
+        ? inventory.find(i => i.name === session.last_item_name)
+        : null;
+      await handleBuyerIntent(ctx, intent, lastItemAsMatch);
+      return;
+    }
   }
   const name = vendor.business_name || 'there';
   await sendWithDelay(sock, jid,
@@ -191,14 +201,37 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
   if (!text && !hasVendorVoice) return;
 
   const identity = await resolveIdentity(buyerJid, text, botNum);
-  const vendor = identity.storeVendor || storeVendor;
+  let vendor = identity.storeVendor || storeVendor;
+  // Vendor flows: use sender's vendor (so we update the right store); for "VENDOR-SETUP <CODE>" use store by code
+  if (identity.context === 'vendor_onboarding' || identity.context === 'vendor_management') {
+    const upper = (text || '').trim().toUpperCase();
+    if (upper.startsWith('VENDOR-SETUP ')) {
+      const after = upper.slice(12).trim();
+      const code = (after.split(/\s+/)[0] || '').replace(/[^A-Z0-9-]/g, '');
+      if (code.length >= 2) {
+        const vByCode = await getVendorByStoreCode(code);
+        if (vByCode) vendor = vByCode;
+      }
+    }
+    if (identity.vendor) vendor = identity.vendor;
+  }
   const vendorPhone = (vendor.whatsapp_number || '').replace(/\D/g, '');
   const vendorJid = `${vendorPhone}@s.whatsapp.net`;
 
   switch (identity.context) {
     case 'vendor_onboarding':
     case 'vendor_management':
-      await handleVendorMessage(sock, msg, vendor, text || '', buyerJid.endsWith('@lid') ? vendorJid : buyerJid);
+      const upperText = (text || '').trim().toUpperCase();
+      if (identity.context === 'vendor_onboarding' && (upperText === 'VENDOR-SETUP' || upperText.startsWith('VENDOR-SETUP '))) {
+        await clearSession(buyerJid, vendor.id);
+        setOnboardingSession(buyerJid, vendor);
+      }
+      // Refetch vendor so onboarding_step is current (important after numeric replies like "6")
+      if (identity.context === 'vendor_onboarding' && vendor?.id) {
+        const fresh = await getVendorById(vendor.id);
+        if (fresh) vendor = fresh;
+      }
+      await handleVendorMessage(sock, msg, vendor, text || '', buyerJid);
       return;
     case 'vendor_or_buyer':
       await handleAmbiguousVendor(sock, buyerJid, text, vendor);
@@ -501,12 +534,11 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
     return;
   }
 
-  // Buyer claims they've already paid: treat as a signal to look for a recent
-  // successful payment and resend the most recent receipt instead of a link.
+  // Buyer claims they've already paid: look for paid txn and resend receipt; if none, verify pending with Paystack (webhook may have been missed).
   const paymentDonePattern = /\b(payment\s*(made|done|completed)|i\s*(just\s*)?paid|have\s+paid|i'?ve\s+paid|paid\s+already|just\s+paid)\b/i;
   if (paymentDonePattern.test(trimmedText)) {
-    const res = await query(
-      `SELECT mono_ref, receipt_number
+    let res = await query(
+      `SELECT mono_ref
        FROM transactions
        WHERE buyer_jid = $1
          AND vendor_id = $2
@@ -516,8 +548,31 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
        LIMIT 1`,
       [buyerJid, vendor.id]
     );
-    const row = res.rows && res.rows[0];
+    let row = res.rows && res.rows[0];
     if (!row) {
+      const pendingRes = await query(
+        `SELECT mono_ref FROM transactions
+         WHERE buyer_jid = $1 AND vendor_id = $2 AND status = 'pending'
+           AND created_at >= NOW() - INTERVAL '24 hours'
+         ORDER BY created_at DESC LIMIT 1`,
+        [buyerJid, vendor.id]
+      );
+      const pending = pendingRes.rows && pendingRes.rows[0];
+      if (pending) {
+        try {
+          const paystackData = await verifyTransaction(pending.mono_ref);
+          if (paystackData && paystackData.status === 'success') {
+            await handlePaymentSuccess({
+              reference: pending.mono_ref,
+              receiptNumber: paystackData.receipt_number || null
+            });
+            logReply('[Payment verified on demand after "I\'ve paid" — receipt sent]');
+            return;
+          }
+        } catch (err) {
+          console.error('[LISTENER] Verify payment on "I\'ve paid":', err.message);
+        }
+      }
       await sendWithDelay(
         sock,
         buyerJid,
@@ -527,14 +582,16 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
       return;
     }
     await sendWithDelay(sock, buyerJid, "Here's the receipt for your most recent order 👇");
-    await sendReceiptForReference(sock, row.mono_ref, row.receipt_number || null);
+    await sendReceiptForReference(sock, row.mono_ref, null);
     logReply('[Receipt re-sent after claimed payment]');
     return;
   }
 
   if (session.intent_state === 'awaiting_payment' && session.pending_payment_ref) {
     const resendWords = ['resend', 'link', 'send link', 'send', 'again', 'yes', 'pay', 'payment', 'how', 'where', 'what', 'get', 'give'];
-    if (resendWords.some(w => text.toLowerCase().includes(w))) {
+    const breakdownPattern = /\b(failed|not working|doesn't work|don't work|broken|expired|error|can'?t pay|cannot pay|won'?t work|no link|didn'?t get|didnt get|breakdown|problem|issue)\b/i;
+    const wantsLinkOrHelp = resendWords.some(w => text.toLowerCase().includes(w)) || breakdownPattern.test(trimmedText);
+    if (wantsLinkOrHelp) {
       const txnRes = await query(
         'SELECT item_name, amount, mono_link, pay_token, status FROM transactions WHERE mono_ref = $1 LIMIT 1',
         [session.pending_payment_ref]
@@ -542,21 +599,22 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
       const txn = txnRes.rows && txnRes.rows[0];
       if (txn && txn.status === 'pending' && txn.mono_link) {
         const amt = `₦${(txn.amount / 100).toLocaleString()}`;
+        const isBreakdown = breakdownPattern.test(trimmedText);
+        const extra = isBreakdown ? '\n\n_If this link still doesn\'t work, tell the seller — they can help or send another._' : '';
         await sendWithDelay(sock, buyerJid,
-          `🔗 *Payment link for ${txn.item_name}* (${amt}):\n\n${txn.mono_link}\n\n_Link is for this order only. Expires in 30 minutes._`
+          `🔗 *Payment link for ${txn.item_name}* (${amt}):\n\n${txn.mono_link}\n\n_Link is for this order only. Expires in 30 minutes._${extra}`
         );
-        logReply(' [Resent payment link]');
+        logReply(isBreakdown ? ' [Resent payment link after breakdown]' : ' [Resent payment link]');
         return;
       }
     }
   }
 
-  // Any message mentioning "receipt" should try to resend the most recent receipt
-  // if there's a paid transaction in this chat within the last 30 minutes.
+  // Any message mentioning "receipt": resend receipt for paid txn; if none, verify pending with Paystack (e.g. webhook missed, no redirect to chat).
   const mentionsReceipt = /\breceipts?\b/i.test(trimmedText);
   if (mentionsReceipt) {
-    const res = await query(
-      `SELECT mono_ref, receipt_number
+    let res = await query(
+      `SELECT mono_ref
        FROM transactions
        WHERE buyer_jid = $1
          AND vendor_id = $2
@@ -566,14 +624,37 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
        LIMIT 1`,
       [buyerJid, vendor.id]
     );
-    const row = res.rows && res.rows[0];
+    let row = res.rows && res.rows[0];
     if (!row) {
+      const pendingRes = await query(
+        `SELECT mono_ref FROM transactions
+         WHERE buyer_jid = $1 AND vendor_id = $2 AND status = 'pending'
+           AND created_at >= NOW() - INTERVAL '24 hours'
+         ORDER BY created_at DESC LIMIT 1`,
+        [buyerJid, vendor.id]
+      );
+      const pending = pendingRes.rows && pendingRes.rows[0];
+      if (pending) {
+        try {
+          const paystackData = await verifyTransaction(pending.mono_ref);
+          if (paystackData && paystackData.status === 'success') {
+            await handlePaymentSuccess({
+              reference: pending.mono_ref,
+              receiptNumber: paystackData.receipt_number || null
+            });
+            logReply('[Payment verified on demand for receipt — receipt sent]');
+            return;
+          }
+        } catch (err) {
+          console.error('[LISTENER] Verify payment for receipt:', err.message);
+        }
+      }
       await sendWithDelay(sock, buyerJid, 'I could not find any recent paid order for this chat. If you just paid and nothing is showing, ask the seller to confirm the reference so we can check.');
       logReply('No recent paid order for receipt');
       return;
     }
     await sendWithDelay(sock, buyerJid, "Here's the receipt for your most recent order 👇");
-    await sendReceiptForReference(sock, row.mono_ref, row.receipt_number || null);
+    await sendReceiptForReference(sock, row.mono_ref, null);
     logReply('[Receipt re-sent]');
     return;
   }

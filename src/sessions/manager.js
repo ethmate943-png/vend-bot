@@ -194,6 +194,7 @@ async function getAnyActiveBuyerSession(buyerJid) {
      FROM sessions s
      WHERE s.buyer_jid = $1
        AND s.intent_state IN ('selecting_item', 'querying', 'negotiating', 'awaiting_payment', 'awaiting_delivery_confirm')
+       AND s.updated_at > NOW() - INTERVAL '2 hours'
      ORDER BY s.updated_at DESC NULLS LAST
      LIMIT 1`,
     [c]
@@ -205,6 +206,7 @@ async function getAnyActiveBuyerSession(buyerJid) {
        FROM sessions s
        WHERE s.buyer_jid = $1
          AND s.intent_state IN ('selecting_item', 'querying', 'negotiating', 'awaiting_payment', 'awaiting_delivery_confirm')
+         AND s.updated_at > NOW() - INTERVAL '2 hours'
        ORDER BY s.updated_at DESC NULLS LAST
        LIMIT 1`,
       [buyerJid]

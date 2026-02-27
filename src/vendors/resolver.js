@@ -41,15 +41,30 @@ async function getVendorByStoreCode(code) {
   return res.rows[0] || null;
 }
 
-/** Sender is a registered vendor if their phone matches a vendor's whatsapp_number. */
-async function getVendorByPhone(phone) {
+/** Phone variants to try so we match 234..., 0..., @lid digits, etc. */
+function phoneVariants(phone) {
   const clean = String(phone || '').replace(/\D/g, '');
-  if (!clean) return null;
-  const res = await query(
-    'SELECT * FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
-    [clean]
-  );
-  return res.rows[0] || null;
+  if (!clean) return [];
+  const out = [clean];
+  // Nigeria: 234 + 10 digits vs 10 digits
+  if (clean.length === 10 && !clean.startsWith('234')) out.push('234' + clean);
+  if (clean.length === 13 && clean.startsWith('234')) out.push(clean.slice(3));
+  // 11 digits starting with 1 (e.g. US-style) → try 234 + rest for Nigeria
+  if (clean.length === 11 && clean.startsWith('1')) out.push('234' + clean.slice(1));
+  return [...new Set(out)];
+}
+
+/** Sender is a registered vendor if their phone matches a vendor's whatsapp_number. Tries multiple formats (234, no 234, @lid). */
+async function getVendorByPhone(phone) {
+  const variants = phoneVariants(phone);
+  for (const v of variants) {
+    const res = await query(
+      'SELECT * FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
+      [v]
+    );
+    if (res.rows && res.rows[0]) return res.rows[0];
+  }
+  return null;
 }
 
 async function getVendorById(vendorId) {

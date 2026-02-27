@@ -216,22 +216,25 @@ app.post('/api/landing/register', async (req, res) => {
       }
     }
 
+    // Set onboarding_step = 'category' so the bot skips business_name and store_code (already set here)
     if (row) {
       await query(
-        'UPDATE vendors SET business_name = $1, store_code = $2 WHERE id = $3',
-        [name, storeCode, row.id]
+        'UPDATE vendors SET business_name = $1, store_code = $2, onboarding_step = $3 WHERE id = $4',
+        [name, storeCode, 'category', row.id]
       );
     } else {
       await query(
-        `INSERT INTO vendors (whatsapp_number, business_name, store_code, status) VALUES ($1, $2, $3, 'probation')`,
+        `INSERT INTO vendors (whatsapp_number, business_name, store_code, status, onboarding_step) VALUES ($1, $2, $3, 'probation', 'category')`,
         [phone, name, storeCode]
       );
     }
     const text = encodeURIComponent(storeCode);
     res.json({
       store_code: storeCode,
+      // Buyer-facing link: they send the store code to browse and buy
       whatsapp_link: `https://wa.me/${waBase}?text=${text}`,
-      setup_link: `https://wa.me/${waBase}?text=${encodeURIComponent(storeCode + ' setup')}`
+      // Vendor-facing link: they send VENDOR-SETUP so the bot knows to continue onboarding/management
+      setup_link: `https://wa.me/${waBase}?text=${encodeURIComponent('VENDOR-SETUP ' + storeCode)}`
     });
   } catch (err) {
     console.error('[SERVER] /api/landing/register error:', err.message);
@@ -307,6 +310,153 @@ app.get('/vendors/links', async (req, res) => {
   } catch (err) {
     console.error('[SERVER] /vendors/links error:', err.message);
     res.status(500).send('Error loading vendor links.');
+  }
+});
+
+// Vendor overview: all generated store links + onboarding status.
+app.get('/vendors/overview', async (req, res) => {
+  try {
+    const bot = (process.env.BOT_NUMBER || process.env.VENDBOT_NUMBER || '').replace(/\D/g, '');
+    const { rows } = await query(
+      `SELECT v.id,
+              v.business_name,
+              v.store_code,
+              v.whatsapp_number,
+              v.category,
+              v.location,
+              v.delivery_coverage,
+              v.turnaround,
+              v.onboarding_step,
+              v.onboarding_complete,
+              v.status,
+              v.total_transactions,
+              v.created_at,
+              inv.product_count,
+              inv.total_stock,
+              inv.min_price,
+              inv.max_price
+       FROM vendors v
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) AS product_count,
+                COALESCE(SUM(quantity), 0) AS total_stock,
+                MIN(price)            AS min_price,
+                MAX(price)            AS max_price
+         FROM inventory_items i
+         WHERE i.vendor_id = v.id
+       ) inv ON true
+       WHERE v.store_code IS NOT NULL AND v.store_code != ''
+       ORDER BY v.created_at DESC NULLS LAST`
+    );
+
+    const vendors = rows.map(v => {
+      const base = bot || (v.whatsapp_number || '').replace(/\D/g, '');
+      const code = encodeURIComponent(v.store_code || '');
+      const buyerUrl = `https://wa.me/${base}?text=${code}`;
+      const setupUrl = `https://wa.me/${base}?text=${encodeURIComponent('VENDOR-SETUP ' + (v.store_code || ''))}`;
+      let onboardingLabel = 'Not started';
+      if (v.onboarding_complete) {
+        onboardingLabel = 'Complete';
+      } else if (v.onboarding_step) {
+        onboardingLabel = `In progress (${v.onboarding_step})`;
+      }
+      return {
+        name: v.business_name || v.store_code,
+        store_code: v.store_code,
+        status: v.status || 'probation',
+        category: v.category || 'unspecified',
+        location: v.location || 'unspecified',
+        coverage: v.delivery_coverage || 'unspecified',
+        turnaround: v.turnaround || null,
+        total_transactions: v.total_transactions || 0,
+        product_count: v.product_count || 0,
+        total_stock: v.total_stock || 0,
+        min_price: v.min_price || 0,
+        max_price: v.max_price || 0,
+        onboarding: onboardingLabel,
+        created_at: v.created_at,
+        buyerUrl,
+        setupUrl
+      };
+    });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>MoovMart Vendor Overview</title>
+        <style>
+          body{font-family:system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;background:#020617;color:#e5e7eb;margin:0;padding:2rem;}
+          h1{font-size:1.6rem;margin:0 0 0.5rem;font-weight:600;}
+          p.subtitle{margin:0 0 1.5rem;font-size:0.9rem;color:#9ca3af;}
+          .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1.25rem;}
+          .card{background:radial-gradient(circle at top left,rgba(37,211,102,0.16),transparent 55%),linear-gradient(135deg,rgba(15,23,42,1),rgba(15,23,42,0.96));border:1px solid rgba(148,163,184,0.35);border-radius:0.9rem;padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:0.35rem;position:relative;overflow:hidden;}
+          .card::before{content:'';position:absolute;inset:-40%;background-image:radial-gradient(circle at 1px 1px,rgba(148,163,184,0.16) 1px,transparent 0);background-size:18px 18px;opacity:0.25;mix-blend-mode:soft-light;pointer-events:none;}
+          .card-inner{position:relative;z-index:1;display:flex;flex-direction:column;gap:0.4rem;}
+          .name{font-weight:600;font-size:0.95rem;color:#f9fafb;}
+          .code{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;font-size:0.8rem;color:#a5b4fc;}
+          .meta-row{display:flex;flex-wrap:wrap;gap:0.45rem;margin-top:0.25rem;font-size:0.72rem;color:#9ca3af;}
+          .meta-pill{padding:0.15rem 0.55rem;border-radius:999px;background:rgba(15,23,42,0.9);border:1px solid rgba(148,163,184,0.35);}
+          .badge-row{display:flex;flex-wrap:wrap;gap:0.35rem;margin-top:0.35rem;}
+          .badge{font-size:0.7rem;text-transform:uppercase;letter-spacing:0.12em;border-radius:999px;padding:0.18rem 0.6rem;border:1px solid rgba(148,163,184,0.4);color:#9ca3af;background:rgba(15,23,42,0.9);}
+          .badge.status-active{border-color:rgba(34,197,94,0.5);color:#bbf7d0;}
+          .badge.status-banned{border-color:rgba(239,68,68,0.6);color:#fecaca;}
+          .badge.onboarding-complete{border-color:rgba(59,130,246,0.6);color:#bfdbfe;}
+          .links{display:flex;flex-wrap:wrap;gap:0.4rem;margin-top:0.55rem;}
+          .links a{font-size:0.78rem;text-decoration:none;border-radius:999px;padding:0.25rem 0.7rem;border:1px solid rgba(148,163,184,0.4);color:#e5e7eb;background:rgba(15,23,42,0.9);}
+          .links a:hover{border-color:rgba(37,211,102,0.7);color:#bbf7d0;}
+          .footer-meta{margin-top:0.35rem;font-size:0.7rem;color:#64748b;display:flex;justify-content:space-between;gap:0.5rem;align-items:flex-end;}
+          .footer-meta span{white-space:nowrap;}
+          @media (max-width:600px){body{padding:1.25rem;}}
+        </style>
+      </head>
+      <body>
+        <h1>MoovMart vendor overview</h1>
+        <p class="subtitle">
+          All vendors with generated store codes. Use this to check onboarding status and avoid redundant links.
+        </p>
+        ${vendors.length === 0 ? '<p>No vendors with store codes found yet.</p>' : `
+          <div class="grid">
+            ${vendors.map(v => `
+              <div class="card">
+                <div class="card-inner">
+                  <div class="name">${v.name}</div>
+                  <div class="code">${v.store_code}</div>
+                  <div class="meta-row">
+                    <span class="meta-pill">Category: ${v.category}</span>
+                    <span class="meta-pill">Location: ${v.location}</span>
+                    <span class="meta-pill">Coverage: ${v.coverage}</span>
+                    ${v.turnaround ? `<span class="meta-pill">Turnaround: ${v.turnaround}</span>` : ''}
+                  </div>
+                  <div class="badge-row">
+                    <span class="badge ${v.status === 'active' ? 'status-active' : (v.status === 'banned' ? 'status-banned' : '')}">Status: ${v.status}</span>
+                    <span class="badge ${v.onboarding === 'Complete' ? 'onboarding-complete' : ''}">Onboarding: ${v.onboarding}</span>
+                  </div>
+                  <div class="badge-row">
+                    <span class="badge">Products: ${v.product_count}</span>
+                    <span class="badge">Total stock: ${v.total_stock}</span>
+                    <span class="badge">Txns: ${v.total_transactions}</span>
+                    ${v.min_price && v.max_price ? `<span class="badge">Price range: ₦${(v.min_price).toLocaleString()} – ₦${(v.max_price).toLocaleString()}</span>` : ''}
+                  </div>
+                  <div class="links">
+                    <a href="${v.buyerUrl}" target="_blank" rel="noopener noreferrer">Buyer link</a>
+                    <a href="${v.setupUrl}" target="_blank" rel="noopener noreferrer">Vendor setup link</a>
+                  </div>
+                  <div class="footer-meta">
+                    <span>Created: ${v.created_at ? new Date(v.created_at).toLocaleString() : 'n/a'}</span>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </body>
+      </html>
+    `);
+  } catch (err) {
+    console.error('[SERVER] /vendors/overview error:', err.message);
+    res.status(500).send('Error loading vendor overview.');
   }
 });
 

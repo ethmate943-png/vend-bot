@@ -175,20 +175,21 @@ async function startBot() {
         continue;
       }
 
-      const body = msg.message.conversation
-        || msg.message.extendedTextMessage?.text
-        || '';
       const ir = msg.message?.interactiveResponseMessage;
-      const hasListReply = msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId
+      const listId = msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId
         || ir?.listReply?.singleSelectReply?.selectedRowId
         || ir?.listReply?.id
         || ir?.listReply?.selectedRowId
         || ir?.list_reply?.id
         || ir?.list_reply?.selectedRowId
-        || msg.message?.templateButtonReplyMessage?.selectedId
-        || !!ir; // pass through any interactive response so listener can try to parse
-      const hasButtonReply = msg.message?.buttonsResponseMessage?.selectedButtonId;
-      if (!body.trim() && !hasListReply && !hasButtonReply) continue;
+        || msg.message?.templateButtonReplyMessage?.selectedId;
+      const buttonId = msg.message?.buttonsResponseMessage?.selectedButtonId;
+      const body = msg.message.conversation
+        || msg.message.extendedTextMessage?.text
+        || listId
+        || buttonId
+        || '';
+      if (!body.trim()) continue;
 
       const phone = jid.replace('@s.whatsapp.net', '');
       if (process.env.PRIVACY_NO_CHAT_LOGS === 'true' || process.env.PRIVACY_NO_CHAT_LOGS === '1') {
