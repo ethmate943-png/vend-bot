@@ -38,10 +38,10 @@ const OUT_OF_STOCK_GENERIC = [
 ];
 
 const LIST_PROMPT = [
-  'Reply with the number (1 to {{max}}) or just tell me what you\'re looking for 😊',
-  'Pick a number from 1 to {{max}}, or say what you want and I\'ll help.',
-  'You can type the number or tell me what you need — 1 to {{max}}.',
-  'Tap the button or reply with a number (1–{{max}}). Or just describe what you want.'
+  'Tell me which one — you can reply with the number or describe what you want 😊',
+  'Pick one, or say what you\'re looking for and I\'ll help.',
+  'Reply with the number, or just tell me what you need.',
+  'Which one works for you? Or describe what you want.'
 ];
 
 const LIST_PROMPT_NO_ITEMS = [
@@ -56,6 +56,26 @@ const LIST_INTRO_FIRST = [
   'Got a few that might work. Take a look:',
   'Here you go — pick one or tell me what you want:'
 ];
+
+/** When query suggests a category (phone, shirt), use contextual intro. */
+function listIntroForCategory(query, matches) {
+  const t = (query || '').toLowerCase();
+  if (/\bphone|iphone|pixel|samsung|smartphone\b/i.test(t) && matches.some(m => (m.category || '').toLowerCase().includes('phone'))) {
+    return pick([
+      "Here's what we have for phones — tap one:",
+      'We\'ve got these phones in stock. Pick one:',
+      'Phones we have right now:'
+    ]);
+  }
+  if (/\bshirt|tee|clothes|wear\b/i.test(t) && matches.some(m => (m.category || '').toLowerCase().includes('cloth'))) {
+    return pick([
+      "Here are the clothes we have — tap to pick:",
+      'Shirts and wear. Take a look:',
+      'These are in stock. Pick one:'
+    ]);
+  }
+  return listIntroFirst();
+}
 
 const LIST_INTRO_SEARCH = [
   "We've got some options for you — here's what we have in stock:",
@@ -113,9 +133,9 @@ const VENDOR_UNAVAILABLE = [
 ];
 
 const LIST_FOOTER = [
-  'Tap the button below or reply with a number.',
-  'Pick one below or reply with the number.',
-  'Tap to select or type the number.'
+  'Tap to pick or reply with the number.',
+  'Pick one — tap or type the number.',
+  'Choose one below.'
 ];
 
 function selectionConfirm(itemName, price) {
@@ -179,6 +199,7 @@ module.exports = {
   outOfStock,
   listPrompt,
   listIntroFirst,
+  listIntroForCategory,
   listIntroSearch,
   listIntroAgain,
   listIntroPurchase,

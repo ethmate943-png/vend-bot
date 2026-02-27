@@ -10,7 +10,13 @@ try {
 }
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  max: 20,
+  min: 2,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  maxUses: 7500,
+  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined
 });
 
 pool.on('error', (err) => {
@@ -24,6 +30,19 @@ async function query(text, params) {
   } catch (e) {
     console.error('[DB] Query error:', e.message, '\nQuery:', text.slice(0, 100));
     throw e;
+  }
+}
+
+/** Retry wrapper for critical queries. Default 3 retries with backoff. */
+async function queryWithRetry(text, params, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await pool.query(text, params);
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      console.log(`[DB] Query failed, retry ${i + 1}/${retries}`);
+      await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+    }
   }
 }
 
@@ -42,4 +61,4 @@ async function withTransaction(callback) {
   }
 }
 
-module.exports = { query, withTransaction, pool };
+module.exports = { query, queryWithRetry, withTransaction, pool };

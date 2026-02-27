@@ -1,6 +1,7 @@
 const { query } = require('../db');
 const { getInventory, getAllInventory, addItems, updateItemQty, updateItemPrice, decrementQty, setItemImage, setItemDescription, useSheets } = require('./manager');
 const { extractInventoryFromText } = require('../ai/extractor');
+const { validateItemPrice } = require('./parser');
 
 /** Resolve items by query: exact SKU match returns one; else all where name or sku contains query. */
 function matchItems(inventory, query) {
@@ -56,9 +57,18 @@ async function handleInventoryCommand(text, vendor) {
     }
     const items = await extractInventoryFromText(content);
     if (!items.length) return 'Could not understand. Try: "add: item name, price, quantity" or "add: name, price, qty, image URL"';
+    for (const i of items) {
+      const err = validateItemPrice(i.price);
+      if (err && (err.includes('must be') || err.includes('greater than zero'))) return err;
+    }
+    let warnMsg = '';
+    for (const i of items) {
+      const err = validateItemPrice(i.price);
+      if (err && (err.includes('too low') || err.includes('very high'))) { warnMsg = err; break; }
+    }
     await addItems(vendor, items);
     const summary = items.map(i => `• ${i.name} — ₦${Number(i.price).toLocaleString()} (${i.quantity} in stock)`).join('\n');
-    return `Added ${items.length} item(s) ✅\n\n${summary}`;
+    return `Added ${items.length} item(s) ✅\n\n${summary}` + (warnMsg ? `\n\n_${warnMsg}_` : '');
   }
 
   if (lower.startsWith('sold:') || lower.startsWith('sold ')) {
@@ -99,16 +109,19 @@ async function handleInventoryCommand(text, vendor) {
     const itemName = lastComma > 0 ? rest.slice(0, lastComma).trim() : '';
     const priceText = lastComma > 0 ? rest.slice(lastComma + 1).trim() : '';
     const newPrice = parseInt(priceText.replace(/[^0-9]/g, ''), 10);
-    if (!itemName || !newPrice || Number.isNaN(newPrice)) {
+    if (!itemName || Number.isNaN(newPrice)) {
       return 'Format: "price: item name or SKU, new price" (e.g. price: MBP14-M2, 25000).';
     }
+    const priceErr = validateItemPrice(newPrice);
+    if (priceErr && (priceErr.includes('must be') || priceErr.includes('greater than zero'))) return priceErr;
     const inventory = await getAllInventory(vendor);
     const matches = matchItems(inventory, itemName);
     if (matches.length === 0) return `Could not find "${itemName}". Try *find: ${itemName}* to search.`;
     if (matches.length > 1) return disambiguationReply(matches, itemName, 'price: MBP14-M2, 25000');
     const item = matches[0];
     const finalPrice = await updateItemPrice(vendor, item.sku, newPrice);
-    return `Price updated ✅ ${item.name} — ₦${Number(finalPrice).toLocaleString()}`;
+    const warn = (priceErr && (priceErr.includes('too low') || priceErr.includes('very high'))) ? `\n\n_${priceErr}_` : '';
+    return `Price updated ✅ ${item.name} — ₦${Number(finalPrice).toLocaleString()}` + warn;
   }
 
   if (lower === 'find' || lower === 'search' || lower.startsWith('find:') || lower.startsWith('find ') || lower.startsWith('search:') || lower.startsWith('search ')) {

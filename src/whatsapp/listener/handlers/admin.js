@@ -7,6 +7,34 @@ const { sendMessage, sendWithDelay } = require('../../sender');
 async function handleAdminCommand(sock, text, adminJid) {
   const upper = (text || '').toUpperCase();
 
+  if (upper.startsWith('DEBUG:')) {
+    const phone = (text || '').replace(/^debug:\s*/i, '').trim().replace(/\D/g, '');
+    if (!phone) {
+      await sendWithDelay(sock, adminJid, 'Use: DEBUG: 08012345678');
+      return;
+    }
+    const jid = `${phone}@s.whatsapp.net`;
+    const { rows } = await query(
+      `SELECT s.intent_state, s.last_item_name, s.last_item_sku, s.message_count, s.updated_at,
+              v.business_name, v.store_code
+       FROM sessions s
+       JOIN vendors v ON v.id = s.vendor_id
+       WHERE s.buyer_jid = $1
+       ORDER BY s.updated_at DESC
+       LIMIT 5`,
+      [jid]
+    );
+    if (!rows.length) {
+      await sendWithDelay(sock, adminJid, `No sessions found for ${phone}`);
+      return;
+    }
+    const summary = rows.map(s =>
+      `Store: ${s.store_code}\nState: ${s.intent_state}\nLast item: ${s.last_item_name || 'none'}\nMessages: ${s.message_count || 0}\nUpdated: ${s.updated_at}`
+    ).join('\n---\n');
+    await sendWithDelay(sock, adminJid, summary);
+    return;
+  }
+
   if (upper.startsWith('TIER:')) {
     const parts = text.replace(/^tier:\s*/i, '').trim().split(/\s+/);
     const code = (parts[0] || '').toUpperCase();

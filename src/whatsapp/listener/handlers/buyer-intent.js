@@ -5,9 +5,10 @@ const { matchProducts } = require('../../../ai/classifier');
 const { generateReply, generateCancelReply, generateCatalogReply } = require('../../../ai/responder');
 const { sendMessage, sendWithDelay, sendListMessage, sendImageWithCaption, sendQuickReplyOptions } = require('../../sender');
 const { logReply } = require('../logger');
-const { listIntroFirst, listIntroSearch, listIntroPurchase, noMatch } = require('../../../ai/human-phrases');
+const { listIntroFirst, listIntroForCategory, listIntroSearch, listIntroPurchase, noMatch } = require('../../../ai/human-phrases');
 const { upsertSession, appendMessage, clearSession, appendConversationExchange } = require('../../../sessions/manager');
 const { handlePurchase } = require('./purchase');
+const { getProduct, handleVariantSelection } = require('../../../inventory/variants');
 const { sendReceiptForReference } = require('../../../payments/receipt-data');
 const { handleNegotiateIntent } = require('./negotiation');
 const { COLORS } = require('../logger');
@@ -64,7 +65,8 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
     return;
   }
 
-  // If they talk about delivery/pickup and we have a last item, keep context instead of "no match".
+  // If they talk about delivery/pickup and we have a last item, keep context instead of "no match",
+  // but do NOT auto-trigger purchase/link. Let them confirm/cart/checkout explicitly.
   const hasDeliveryWords = /(delivery|deliver|pickup|pick up|drop off|drop at|send to|ship to)/i.test(text || '');
   const hasContextItem = !!session.last_item_name || !!session.last_item_sku || !!lastItemAsMatch;
   if (hasDeliveryWords && hasContextItem && (session.intent_state === 'querying' || session.intent_state === 'negotiating' || session.intent_state === 'selecting_item' || session.intent_state === 'awaiting_payment')) {
@@ -85,7 +87,6 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
       await sendWithDelay(sock, buyerJid, confirm);
       logReply(confirm);
       await appendMessage(buyerJid, vendor.id, 'bot', confirm);
-      await handlePurchase(sock, buyerJid, vendor, session, item, reusePrice);
       return;
     }
   }
@@ -96,6 +97,11 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
 
     if (matches.length === 1) {
       const item = matches[0];
+      const variantProduct = await getProduct(vendor.id, item.sku);
+      if (variantProduct) {
+        await handleVariantSelection(sock, buyerJid, vendor, variantProduct, session);
+        return;
+      }
       const reply = await generateReply(text, inventory, vendor, history, session);
       const caption = item.description ? `${reply}\n\n${item.description}` : reply;
       if (item.image_url) {
@@ -144,9 +150,8 @@ async function handleBuyerIntent(ctx, intent, lastItemAsMatch) {
         });
         await sendQuickReplyOptions(sock, buyerJid);
       } else {
-        const isSearchLike = /looking for|do you have|any (one|of)|i('m| am) looking|i need (a|an|some)|get me|find me|you get|wetin you get/i.test(text || '');
-        const intro = isSearchLike ? listIntroSearch() : listIntroFirst();
-        await sendListMessage(sock, buyerJid, intro, 'Choose option', matches);
+        const intro = listIntroForCategory(text, matches);
+        await sendListMessage(sock, buyerJid, intro, 'See options', matches);
         await sendQuickReplyOptions(sock, buyerJid);
         logReply('[List]');
         await appendMessage(buyerJid, vendor.id, 'bot', '[List]');

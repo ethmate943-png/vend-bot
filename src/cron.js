@@ -6,6 +6,8 @@ const { runContentAgent } = require('./agents/content');
 const { runAbandonmentAgent } = require('./agents/abandonment');
 const { runPricingAgent } = require('./agents/pricing');
 const { runVendorTierGraduation, runDemotionChecks } = require('./verified-vendor');
+const { reconcileOrphanedPayments } = require('./payments/reconcile');
+const { cleanup: cleanupRateLimit } = require('./safety/ratelimit');
 
 function getSock() {
   return require('./whatsapp/client').getSock();
@@ -50,6 +52,24 @@ function startCronJobs() {
       }
     } catch (err) {
       console.error('[CRON] Payment expiry error:', err.message);
+    }
+  });
+
+  // Every 15 minutes — reconcile orphaned payments (webhook missed)
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      await reconcileOrphanedPayments();
+    } catch (err) {
+      console.error('[CRON] Reconcile error:', err.message);
+    }
+  });
+
+  // Every 5 minutes — prune rate limit map
+  cron.schedule('*/5 * * * *', () => {
+    try {
+      cleanupRateLimit();
+    } catch (err) {
+      console.error('[CRON] Rate limit cleanup error:', err.message);
     }
   });
 

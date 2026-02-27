@@ -72,6 +72,9 @@ async function handleCartMessage(ctx) {
       item = inventory.find(i => i.sku === sku);
     }
     if (!item) item = resolveItemFromContext(session, inventory);
+    if (!item && session.last_item_sku && session.last_item_name && session.last_item_price != null) {
+      item = { sku: session.last_item_sku, name: session.last_item_name, price: session.last_item_price };
+    }
     if (!item) {
       const reply = `I'm not sure which item to add. Pick something from the list (e.g. reply *2*), or ask about an item first, then say *add to cart*.`;
       await sendWithDelay(sock, buyerJid, reply);

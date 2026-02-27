@@ -2,6 +2,8 @@
 require('dotenv').config();
 const { query } = require('../src/db');
 const statements = [
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
   `ALTER TABLE transactions ADD COLUMN IF NOT EXISTS pay_token VARCHAR(64) UNIQUE`,
   `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS daily_volume_kobo BIGINT DEFAULT 0`,
   `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS volume_reset_at TIMESTAMPTZ DEFAULT NOW()`,
@@ -84,7 +86,33 @@ const statements = [
   `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS message_count INT DEFAULT 0`,
   `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_state TEXT`,
   `ALTER TABLE vendors ADD COLUMN IF NOT EXISTS vendor_state_data JSONB`,
-  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS list_offset INTEGER DEFAULT 0`
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS list_offset INTEGER DEFAULT 0`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS buyer_name TEXT`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS buyer_name_source TEXT`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS payment_link_sent_at TIMESTAMPTZ`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS sessions_buyer_vendor_unique ON sessions(buyer_jid, vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS sessions_buyer_vendor ON sessions(buyer_jid, vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS sessions_updated ON sessions(updated_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS transactions_vendor_status ON transactions(vendor_id, status)`,
+  `CREATE INDEX IF NOT EXISTS transactions_buyer_vendor ON transactions(buyer_jid, vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS transactions_mono_ref ON transactions(mono_ref)`,
+  `CREATE INDEX IF NOT EXISTS transactions_created ON transactions(created_at DESC)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS vendors_store_code_unique ON vendors(store_code) WHERE store_code IS NOT NULL AND store_code != ''`,
+  `CREATE INDEX IF NOT EXISTS vendors_phone ON vendors(whatsapp_number)`,
+  `CREATE INDEX IF NOT EXISTS vendors_status ON vendors(status) WHERE status = 'active'`,
+  `CREATE TABLE IF NOT EXISTS inventory_products ( id UUID PRIMARY KEY DEFAULT gen_random_uuid(), vendor_id UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, sku TEXT NOT NULL, name TEXT NOT NULL, description TEXT, category TEXT, has_variants BOOLEAN DEFAULT false, variant_types JSONB DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(vendor_id, sku) )`,
+  `CREATE INDEX IF NOT EXISTS idx_inventory_products_vendor ON inventory_products(vendor_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_inventory_products_sku ON inventory_products(vendor_id, sku)`,
+  `CREATE TABLE IF NOT EXISTS inventory_variants ( id UUID PRIMARY KEY DEFAULT gen_random_uuid(), vendor_id UUID NOT NULL REFERENCES vendors(id) ON DELETE CASCADE, parent_sku TEXT NOT NULL, variant_sku TEXT NOT NULL, name TEXT NOT NULL, variant_label TEXT NOT NULL, price BIGINT NOT NULL, quantity INT DEFAULT 0, attributes JSONB DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(vendor_id, variant_sku) )`,
+  `CREATE INDEX IF NOT EXISTS idx_inventory_variants_vendor_parent ON inventory_variants(vendor_id, parent_sku)`,
+  `CREATE INDEX IF NOT EXISTS idx_inventory_variants_sku ON inventory_variants(vendor_id, variant_sku)`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS variant_selections JSONB`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_variant_product_sku TEXT`,
+  `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_variant_type TEXT`,
+  `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'`,
+  `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS video_url TEXT`,
+  `ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS thumbnail_url TEXT`,
+  `ALTER TABLE inventory_variants ADD COLUMN IF NOT EXISTS image_url TEXT`
 ];
 
 async function main() {

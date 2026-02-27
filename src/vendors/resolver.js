@@ -41,6 +41,23 @@ async function getVendorByStoreCode(code) {
   return res.rows[0] || null;
 }
 
+/** Sender is a registered vendor if their phone matches a vendor's whatsapp_number. */
+async function getVendorByPhone(phone) {
+  const clean = String(phone || '').replace(/\D/g, '');
+  if (!clean) return null;
+  const res = await query(
+    'SELECT * FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
+    [clean]
+  );
+  return res.rows[0] || null;
+}
+
+async function getVendorById(vendorId) {
+  if (!vendorId) return null;
+  const res = await query('SELECT * FROM vendors WHERE id = $1 LIMIT 1', [vendorId]);
+  return res.rows[0] || null;
+}
+
 async function incrementNoCount(vendorId) {
   const res = await query(
     'SELECT no_count, status FROM vendors WHERE id = $1',
@@ -61,4 +78,4 @@ async function incrementNoCount(vendorId) {
   return newCount;
 }
 
-module.exports = { getVendorByBotNumber, getVendorByStoreCode, incrementNoCount };
+module.exports = { getVendorByBotNumber, getVendorByStoreCode, getVendorByPhone, getVendorById, incrementNoCount };

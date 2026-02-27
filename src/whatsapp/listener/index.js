@@ -1,7 +1,9 @@
 /** Main message router: extract text, resolve vendor, delegate to handlers */
 
-const { getSession, getChatHistory, appendMessage, clearSession, getConversationHistory, appendConversationExchange, setSessionRole, appendHistory, upsertSession } = require('../../sessions/manager');
+const { getSession, getChatHistory, appendMessage, clearSession, getConversationHistory, appendConversationExchange, setSessionRole, appendHistory, upsertSession, getAnyActiveBuyerSession } = require('../../sessions/manager');
 const { getVendorByBotNumber, getVendorByStoreCode } = require('../../vendors/resolver');
+const { resolveIdentity } = require('../../identity/resolver');
+const { getBuyerDisplayNameFromMessage, extractNameFromMessage, buildGreeting } = require('../../identity/buyer');
 const { getInventory } = require('../../inventory/manager');
 const { sendWithDelay } = require('../sender');
 const { logReply, logMessage } = require('./logger');
@@ -20,6 +22,7 @@ const { sendReceiptForReference } = require('../../payments/receipt-data');
 const { query } = require('../../db');
 const { isDuplicate } = require('../dedup');
 const { getBuyerQueue } = require('../queue');
+const { isRateLimited } = require('../../safety/ratelimit');
 
 function extractText(msg) {
   let text = (
@@ -70,6 +73,48 @@ function extractText(msg) {
   return text;
 }
 
+async function handleAmbiguousVendor(sock, jid, text, vendor) {
+  const active = await getAnyActiveBuyerSession(jid);
+  if (active && active.vendor_id && active.vendor_id === vendor.id) {
+    const sessionRow = await getSession(jid, vendor.id) || {};
+    const session = { ...sessionRow, conversation_history: getConversationHistory(sessionRow) };
+    const inventory = await getInventory(vendor);
+    const history = getChatHistory(session);
+    const ctx = { sock, buyerJid: jid, vendor, session, inventory, history, text };
+    if (await handleCartMessage(ctx)) return;
+    if (await handleNegotiationReply(ctx)) return;
+    if (await handleSelectingItem(ctx)) return;
+    const intent = await classifyIntent(text, {}, [], vendor);
+    logMessage(vendor.business_name, jid, text, intent);
+    const trimmed = text.trim();
+    const vagueRef = /^(it|that\s*one?|this\s*one|the\s*(bag|one|item|first\s*one|sneakers|pair)|how\s*much|price|cost|amount|how\s*much\s*again|price\s*\?|send\s*link|pls|please)\s*[?.!]*$/i.test(trimmed)
+      || (trimmed.length <= 20 && /^(that|this|the\s*one|again)\s*[?.!]*$/i.test(trimmed));
+    const lastItemAsMatch = vagueRef && session.last_item_name
+      ? inventory.find(i => i.name === session.last_item_name)
+      : null;
+    await handleBuyerIntent(ctx, intent, lastItemAsMatch);
+    return;
+  }
+  const name = vendor.business_name || 'there';
+  await sendWithDelay(sock, jid,
+    `Hi ${name} 👋\n\nAre you managing your store or shopping?\n\n` +
+    `*1* — Manage my store\n` +
+    `*2* — Shop from another store\n\n` +
+    `Or just send a store code to start shopping.`
+  );
+  logReply('[Ambiguous vendor — asked store vs shop]');
+}
+
+async function handleUnknown(sock, jid, text, vendor) {
+  const code = (vendor.store_code || '').toUpperCase().trim();
+  const storeLabel = vendor.business_name || 'this store';
+  const line = code
+    ? `Send *${code}* to see our catalogue, or tell me what you're looking for.`
+    : `Welcome to *${storeLabel}*. What are you looking for?`;
+  await sendWithDelay(sock, jid, `Hi! ${line}`);
+  logReply('[Unknown — invited to send store code or query]');
+}
+
 async function handleMessage(sock, msg) {
   if (!msg.message) return;
   const buyerJid = msg.key.remoteJid;
@@ -81,6 +126,10 @@ async function handleMessage(sock, msg) {
     console.log('[LISTENER] Duplicate message', messageId, '— skipping');
     return;
   }
+  if (isRateLimited(buyerJid)) {
+    console.log('[LISTENER] Rate limited', buyerJid);
+    return;
+  }
 
   const queue = getBuyerQueue(buyerJid);
   await queue.add(async () => {
@@ -89,8 +138,9 @@ async function handleMessage(sock, msg) {
 }
 
 async function handleBuyerMessage(sock, msg, buyerJid) {
-  const botNum = (sock.user?.id || '').split(':')[0].replace(/\D/g, '');
-  const text = extractText(msg);
+  // Cloud API has no sock.user; use VENDBOT_NUMBER (display phone of the Cloud API number)
+  const botNum = (sock.user?.id || process.env.VENDBOT_NUMBER || '').split(':')[0].replace(/\D/g, '');
+  let text = extractText(msg);
 
   const adminPhone = (process.env.ADMIN_WHATSAPP || '').replace(/\D/g, '');
   if (adminPhone && buyerJid === adminPhone + '@s.whatsapp.net' && (text || '').trim()) {
@@ -98,44 +148,77 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
     return;
   }
 
-  const vendor = await getVendorByBotNumber(botNum);
-  if (!vendor || vendor.status === 'banned' || vendor.status === 'suspended') return;
+  const storeVendor = await getVendorByBotNumber(botNum);
+  if (!storeVendor || storeVendor.status === 'banned' || storeVendor.status === 'suspended') return;
 
-  const vendorPhone = (vendor.whatsapp_number || '').replace(/\D/g, '');
-  const chatPhone = buyerJid.endsWith('@lid')
-    ? ''
-    : (buyerJid || '').replace(/@s.whatsapp.net$/, '').replace(/\D/g, '');
-  const isSelfChat = buyerJid.endsWith('@lid') || chatPhone === botNum;
-  if (msg.key.fromMe && !isSelfChat) return;
+  // Buyer sent image — use caption as query or redirect
+  if (msg.message?.imageMessage) {
+    const cap = (msg.message.imageMessage.caption || '').trim();
+    if (cap) {
+      text = cap;
+    } else {
+      try { await sock.sendPresenceUpdate('composing', buyerJid); } catch (_) {}
+      await sendWithDelay(sock, buyerJid,
+        `I can see you sent a photo 😊\n\n` +
+        `I can't search by image yet — but tell me what you're looking for and I'll check if we have it.`
+      );
+      return;
+    }
+  }
 
-  const sessionRow = await getSession(buyerJid, vendor.id) || {};
-  const forcedRole = sessionRow.role === 'vendor' ? 'vendor' : sessionRow.role === 'buyer' ? 'buyer' : null;
+  // Location shared — acknowledge and give delivery info
+  if (msg.message?.locationMessage) {
+    const coverage = storeVendor.delivery_coverage === 'nationwide'
+      ? 'deliver anywhere in Nigeria 🇳🇬'
+      : `deliver within ${storeVendor.location || 'our area'}`;
+    await sendWithDelay(sock, buyerJid,
+      `Thanks for sharing your location!\n\n` +
+      `If you're checking if we deliver to you — we ${coverage}.\n\n` +
+      `What would you like to order?`
+    );
+    return;
+  }
+  // Contact card — can't process
+  if (msg.message?.contactMessage) {
+    await sendWithDelay(sock, buyerJid,
+      `I received a contact but I can only process text messages and orders.\n\n` +
+      `What are you looking for?`
+    );
+    return;
+  }
 
-  // Default to buyer. Only treat as vendor when we're sure: same phone as store owner, or role pinned.
-  const isVendorChatBase =
-    (chatPhone && vendorPhone && chatPhone === vendorPhone);
-
-  const isVendorChat =
-    forcedRole === 'vendor'
-      ? true
-      : forcedRole === 'buyer'
-        ? false
-        : isVendorChatBase;
-
-  // When role is forced to vendor, treat all messages in this chat as vendor messages,
-  // even if the JID is a @lid device or doesn't match vendorPhone exactly.
-  const isVendorMessage =
-    (forcedRole === 'vendor')
-      ? true
-      : isVendorChat &&
-        (
-          msg.key.fromMe ||
-          (chatPhone && chatPhone === vendorPhone)
-        );
-  const hasVendorVoice = isVendorMessage && (msg.message?.audioMessage || msg.message?.pttMessage);
+  const hasVendorVoice = (msg.message?.audioMessage || msg.message?.pttMessage);
   if (!text && !hasVendorVoice) return;
 
-  // Test helper: allow toggling how this chat is treated (buyer vs vendor)
+  const identity = await resolveIdentity(buyerJid, text, botNum);
+  const vendor = identity.storeVendor || storeVendor;
+  const vendorPhone = (vendor.whatsapp_number || '').replace(/\D/g, '');
+  const vendorJid = `${vendorPhone}@s.whatsapp.net`;
+
+  switch (identity.context) {
+    case 'vendor_onboarding':
+    case 'vendor_management':
+      await handleVendorMessage(sock, msg, vendor, text || '', buyerJid.endsWith('@lid') ? vendorJid : buyerJid);
+      return;
+    case 'vendor_or_buyer':
+      await handleAmbiguousVendor(sock, buyerJid, text, vendor);
+      return;
+    case 'unknown':
+      await handleUnknown(sock, buyerJid, text, vendor);
+      return;
+    default:
+      break;
+  }
+
+  // Typing indicator immediately — buyer sees activity while we work
+  try { await sock.sendPresenceUpdate('composing', buyerJid); } catch (_) {}
+
+  // Parallel DB reads — session + inventory together (cache is invalidated only when stock actually changes)
+  const [sessionRow, inventoryEarly] = await Promise.all([
+    getSession(buyerJid, vendor.id),
+    getInventory(vendor)
+  ]);
+  const sessionRowResolved = sessionRow || {};
   const lowerCommand = (text || '').trim().toLowerCase();
   if (lowerCommand === 'test:mode vendor' || lowerCommand === 'test:vendor') {
     await setSessionRole(buyerJid, vendor.id, 'vendor');
@@ -148,13 +231,6 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
     return;
   }
 
-  if (isVendorMessage) {
-    const vendorJid = isSelfChat ? buyerJid : (chatPhone ? `${chatPhone}@s.whatsapp.net` : `${vendorPhone}@s.whatsapp.net`);
-    await handleVendorMessage(sock, msg, vendor, text || '', vendorJid);
-    return;
-  }
-
-  // Non-vendor sending VENDOR-SETUP to a store bot: explain what to do instead
   const trimmedText = (text || '').trim();
   if (/^vendor[\s-]*setup$/i.test(trimmedText)) {
     const storeLabel = vendor.business_name && !/something went wrong on our end/i.test(vendor.business_name)
@@ -172,13 +248,26 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
   }
 
   const session = {
-    ...sessionRow,
-    conversation_history: getConversationHistory(sessionRow)
+    ...sessionRowResolved,
+    conversation_history: getConversationHistory(sessionRowResolved)
   };
   const lowerText = text.toLowerCase().trim();
 
+  // Capture buyer name from WhatsApp profile (pushName) or from conversation
+  const fromMsg = getBuyerDisplayNameFromMessage(msg);
+  if (fromMsg && !session.buyer_name) {
+    await upsertSession(buyerJid, vendor.id, { buyer_name: fromMsg.slice(0, 80), buyer_name_source: 'whatsapp_profile' });
+    session.buyer_name = fromMsg.slice(0, 80);
+  }
+  const fromConversation = extractNameFromMessage(text, session.buyer_name);
+  if (fromConversation) {
+    await upsertSession(buyerJid, vendor.id, { buyer_name: fromConversation, buyer_name_source: 'conversation' });
+    session.buyer_name = fromConversation;
+  }
+  const displayName = session.buyer_name || fromMsg;
+
   // First-time / idle, non-vendor chats: identify vendor from store code in message, then show stock
-  const isNewSession = !sessionRow || !sessionRow.intent_state || session.intent_state === 'idle';
+  const isNewSession = !sessionRowResolved || !sessionRowResolved.intent_state || session.intent_state === 'idle';
   const upperText = trimmedText.toUpperCase();
 
   // Try to identify vendor from store code in the message (e.g. "AMAKA", "hi AMAKA", "AMAKA hi")
@@ -205,9 +294,15 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
   if ((isNewSession && (isGreeting || looksLikeStoreCodeEntry || messageHasStoreCode)) || isStoreCodeWithGreeting) {
     const inventory = await getInventory(vendorForGreet);
     const name = vendorForGreet.business_name || 'this store';
+    const recentTx = await query(
+      'SELECT 1 FROM transactions WHERE buyer_jid = $1 AND vendor_id = $2 AND status = $3 LIMIT 1',
+      [buyerJid, vendorForGreet.id, 'paid']
+    );
+    const isReturning = !!(recentTx.rows && recentTx.rows.length > 0);
+    const greeting = buildGreeting(vendorForGreet, session, isReturning, displayName);
     if (!inventory.length) {
       const reply =
-        `Welcome to *${name}* 👋\n\n` +
+        `${greeting} Welcome to *${name}* 👋\n\n` +
         `The vendor hasn't loaded items yet. You can still tell me what you're looking for, and they'll update their stock.`;
       await sendWithDelay(sock, buyerJid, reply);
       logReply(reply);
@@ -222,7 +317,7 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
       ? `\n\n…and ${inventory.length - top.length} more item(s) in stock.`
       : '';
     const reply =
-      `Welcome to *${name}* 👋\n\n` +
+      `${greeting} Welcome to *${name}* 👋\n\n` +
       `Here's what's in stock right now (${inventory.length} item${inventory.length === 1 ? '' : 's'}):\n\n` +
       `${list}${moreLine}\n\n` +
       `Reply with a number to choose (e.g. *1*–*10*), or type *11* for the next 10 items.`;
@@ -263,8 +358,8 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
     }
   }
 
-  // Gatekeeper: decide if we should respond at all to this message.
-  const gate = shouldRespond(text, vendor, session);
+  // Gatekeeper: stateless — only drop obvious noise so the model doesn't over-respond.
+  const gate = shouldRespond(text);
   if (!gate.respond) {
     await appendHistory(buyerJid, vendor.id, 'buyer', text);
     return;
@@ -278,7 +373,7 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
     return;
   }
 
-  const inventory = await getInventory(vendor);
+  const inventory = inventoryEarly;
   const history = getChatHistory(session);
   await appendMessage(buyerJid, vendor.id, 'buyer', text);
   await appendHistory(buyerJid, vendor.id, 'buyer', text);
@@ -299,11 +394,99 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
   // If there's no commerce context yet, ignore bare confirmations like "yes", "ok", "k"
   const isBareConfirm = /^(yes|ok|okay|k|kk|sure|yup|yeah|yep)[.!?]*$/.test(lowerText);
   const hasCommerceHistory = history.some(m => m.role === 'bot');
-  const hasContextState = ['querying', 'selecting_item', 'negotiating', 'awaiting_payment', 'awaiting_delivery_confirm']
+  const hasContextState = ['querying', 'selecting_item', 'selecting_variant', 'variant_ready', 'negotiating', 'awaiting_payment', 'awaiting_delivery_confirm']
     .includes(session.intent_state);
   if (isBareConfirm && !hasCommerceHistory && !hasContextState && !session.last_item_name) {
     console.log('  [SKIP] Bare confirmation without commerce context, ignoring.');
     return;
+  }
+
+  if (session.intent_state === 'selecting_variant') {
+    if (/^(cancel|never mind|forget it|something else|no)$/i.test(trimmedText)) {
+      const { upsertSessionFields } = require('../../sessions/manager');
+      await upsertSessionFields(buyerJid, vendor.id, {
+        intent_state: 'querying',
+        variant_selections: null,
+        pending_variant_product_sku: null,
+        pending_variant_type: null
+      });
+      await sendWithDelay(sock, buyerJid, `No problem. What would you like to see instead?`);
+      return;
+    }
+    const { handleVariantReply } = require('../../inventory/variants');
+    await handleVariantReply(sock, buyerJid, text, vendor, session);
+    return;
+  }
+
+  if (session.intent_state === 'variant_ready') {
+    const { getProductBySku, handleVariantSelection } = require('../../inventory/variants');
+    const { handlePurchase } = require('./handlers/purchase');
+    const { upsertSessionFields } = require('../../sessions/manager');
+    const lower = trimmedText.toLowerCase();
+
+    // Buyer is happy with the chosen variant and wants to pay
+    if (/^(yes|continue|go|go ahead|ok|okay|sure|send link|send payment|pay now|i(?:'ll| will) (take|get)|ready|proceed)$/i.test(trimmedText) ||
+        /\b(send (me )?(the )?link|payment link|i want to pay|ready to pay)\b/i.test(lower)) {
+      let item = inventory.find(i => i.sku === session.last_item_sku || i.name === session.last_item_name);
+      if (!item && session.last_item_sku && session.last_item_name && session.last_item_price != null) {
+        item = { sku: session.last_item_sku, name: session.last_item_name, price: session.last_item_price };
+      }
+      if (item) {
+        await upsertSessionFields(buyerJid, vendor.id, {
+          intent_state: 'querying',
+          variant_selections: null,
+          pending_variant_product_sku: null
+        });
+        await handlePurchase(sock, buyerJid, vendor, session, item);
+      }
+      return;
+    }
+
+    // Buyer wants to change variant options (e.g. "change RAM", "different color")
+    if (/\b(what (storage|color|colour|size|ram)|change|different|switch)\b/i.test(lower) && session.pending_variant_product_sku) {
+      const product = await getProductBySku(vendor.id, session.pending_variant_product_sku);
+      if (product) {
+        const variantTypes = Array.isArray(product.variant_types) ? product.variant_types : [];
+        const mWhat = lower.match(/what\s+(storage|color|colour|size|ram)/);
+        const mChange = lower.match(/change\s+(storage|color|colour|size|ram)/);
+        let changeType = (mWhat && mWhat[1]) || (mChange && mChange[1]) || null;
+        if (changeType) {
+          changeType = changeType.replace('colour', 'color');
+        }
+        if (!changeType) {
+          if (lower.includes('storage')) changeType = 'storage';
+          else if (lower.includes('color') || lower.includes('colour')) changeType = 'color';
+          else if (lower.includes('size')) changeType = 'size';
+          else if (lower.includes('ram')) changeType = 'ram';
+        }
+
+        let newSelections = { ...(session.variant_selections || {}) };
+
+        // If they didn't specify which attribute, fall back to the last selected one
+        if (!changeType && variantTypes.length) {
+          const reversed = [...variantTypes].reverse();
+          changeType = reversed.find(t => newSelections[t]);
+        }
+
+        if (changeType && variantTypes.includes(changeType)) {
+          delete newSelections[changeType];
+          await upsertSessionFields(buyerJid, vendor.id, {
+            intent_state: 'selecting_variant',
+            variant_selections: newSelections,
+            pending_variant_type: changeType
+          });
+          await handleVariantSelection(sock, buyerJid, vendor, { ...session, variant_selections: newSelections });
+          return;
+        }
+
+        // Fallback: if we still don't know what to change, re-run variant selection from current state
+        await upsertSessionFields(buyerJid, vendor.id, {
+          intent_state: 'selecting_variant'
+        });
+        await handleVariantSelection(sock, buyerJid, vendor, { ...session, variant_selections: newSelections });
+      }
+      return;
+    }
   }
 
   if (session.intent_state === 'awaiting_delivery_confirm') {
@@ -397,7 +580,11 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
 
   if (await handleCartMessage(ctx)) return;
   if (await handleNegotiationReply(ctx)) return;
-  if (await handleSelectingItem(ctx)) return;
+
+  // Product/stock queries go through QUERY flow (match DB, show what we have) — skip list handler
+  const isProductQuery = /\b(phone|iphone|pixel|samsung|shirt|tee|need|want|looking for|what'?s? in stock|what do you have|do you have|you have|you get|wetin you get|what you sell|wetin you sell|anything available|what'?s? available|options|browsing|show me)\b/i.test(trimmedText)
+    || /^(what'?s? in stock|what (do you )?have|do you have|an? (iphone|pixel|phone|shirt)\b)/i.test(trimmedText);
+  if (!isProductQuery && (await handleSelectingItem(ctx))) return;
 
   if (lowerText === 'help' || lowerText === 'menu' || lowerText === 'options') {
     const reply = `Here's how I can help:\n\n• Ask what's in stock (e.g. "Do you have sneakers?")\n• Say what you want to buy (e.g. "I want the black one")\n• Reply with a number when I show you a list\n• Say *cancel* if you change your mind\n\nWhat are you looking for? 😊`;
@@ -407,7 +594,31 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
     return;
   }
 
-  const intent = await classifyIntent(text, session, history, vendor);
+  // Repetition: same or very similar message again — handle by state instead of re-classifying
+  const recentUser = (history || []).filter(h => h.role === 'buyer' || h.role === 'user').slice(-4).map(h => (h.text || h.content || '').toLowerCase().trim());
+  const currentNorm = trimmedText.toLowerCase().trim();
+  const isExactRepeat = recentUser.includes(currentNorm);
+  const isShortSimilar = currentNorm.length < 25 && recentUser.some(prev => prev.length < 25 && prev !== currentNorm && (prev.includes(currentNorm) || currentNorm.includes(prev)));
+  if (isExactRepeat || isShortSimilar) {
+    console.log('[LISTENER] Repetition detected — handling by state');
+    if (session.intent_state === 'awaiting_payment' && session.pending_payment_ref) {
+      await sendWithDelay(sock, buyerJid,
+        `I already sent you a payment link just now.\n\nCheck your messages above — the link is there. It expires in 30 minutes.`
+      );
+      return;
+    }
+    if ((session.intent_state === 'querying' || session.intent_state === 'selecting_item') && session.last_item_name) {
+      const lastItem = inventory.find(i => i.name === session.last_item_name) || inventory.find(i => i.sku === session.last_item_sku);
+      if (lastItem) {
+        await handlePurchase(sock, buyerJid, vendor, session, lastItem);
+        return;
+      }
+    }
+    await sendWithDelay(sock, buyerJid, `Let me try again — what exactly do you need?`);
+    return;
+  }
+
+  const intent = await classifyIntent(text, {}, [], vendor);
   logMessage(vendor.business_name, buyerJid, text, intent);
 
   const trimmed = text.trim();

@@ -57,6 +57,14 @@ function inferIntentFromPatterns(message, sessionContext = {}) {
   // Pure greeting with nothing else -> IGNORE
   if (PURE_GREETING.test(text)) return 'IGNORE';
 
+  // Product/stock/availability queries -> QUERY (check DB, show what we have)
+  if (
+    /\b(what'?s? in stock|in stock|what do you have|do you have|you have|you get|wetin you get|what you sell|wetin you sell)\b/i.test(text) ||
+    /\b(anything available|what'?s? available|what options|show me|browsing|just checking)\b/i.test(text) ||
+    /\b(i need|i want|looking for)\s+(a |an |the )?(phone|iphone|pixel|samsung|shirt|tee|sneaker)\b/i.test(text) ||
+    /^(an? |the )?(iphone|pixel|samsung|phone|shirt|tee)\b/i.test(text)
+  ) return 'QUERY';
+
   // Strong cancel
   if (CANCEL_PHRASES.some(p => text.includes(p))) return 'CANCEL';
 

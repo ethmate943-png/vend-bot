@@ -9,6 +9,7 @@
  */
 const sheets = require('./sheets');
 const db = require('./db');
+const inventoryCache = require('./cache');
 const { getSock } = require('../whatsapp/client');
 const { sendWithDelay } = require('../whatsapp/sender');
 
@@ -22,19 +23,65 @@ function useSheets(vendor) {
 
 async function getInventory(vendor, tab) {
   if (!vendor) return [];
+  const cached = inventoryCache.get(vendor.id);
+  if (cached) return cached;
   if (useSheets(vendor)) {
-    const list = await sheets.getInventory(vendor.sheet_id || vendor.sheetId, tab || vendor.sheet_tab || 'Sheet1');
-    return list.map((i) => ({ ...i, image_url: i.image_url || null }));
+    try {
+      const list = await sheets.getInventory(vendor.sheet_id || vendor.sheetId, tab || vendor.sheet_tab || 'Sheet1');
+      const data = list.map((i) => ({ ...i, image_url: i.image_url || null }));
+      inventoryCache.set(vendor.id, data);
+      return data;
+    } catch (err) {
+      const code = err.code ?? err.response?.status;
+      if (code === 403 || code === 404) {
+        const phone = (vendor.whatsapp_number || '').replace(/\D/g, '');
+        if (phone && getSock) {
+          const sock = getSock();
+          if (sock) {
+            const serviceEmail = (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '').trim();
+            await sendWithDelay(sock, `${phone}@s.whatsapp.net`,
+              `⚠️ I can't access your inventory spreadsheet anymore.\n\n` +
+              `Please make sure it's shared with:\n${serviceEmail || '(your service account email)'}\n\n` +
+              `Buyers won't see your products until this is fixed.`
+            );
+          }
+        }
+        return [];
+      }
+      throw err;
+    }
   }
-  return db.getInventoryDb(vendor.id);
+  const data = await db.getInventoryDb(vendor.id);
+  inventoryCache.set(vendor.id, data);
+  return data;
 }
 
 /** All items including out-of-stock (for search, price, image). */
 async function getAllInventory(vendor, tab) {
   if (!vendor) return [];
   if (useSheets(vendor)) {
-    const list = await sheets.getInventoryAll(vendor.sheet_id || vendor.sheetId, tab || vendor.sheet_tab || 'Sheet1');
-    return list.map((i) => ({ ...i, image_url: i.image_url || null }));
+    try {
+      const list = await sheets.getInventoryAll(vendor.sheet_id || vendor.sheetId, tab || vendor.sheet_tab || 'Sheet1');
+      return list.map((i) => ({ ...i, image_url: i.image_url || null }));
+    } catch (err) {
+      const code = err.code ?? err.response?.status;
+      if (code === 403 || code === 404) {
+        const phone = (vendor.whatsapp_number || '').replace(/\D/g, '');
+        if (phone && getSock) {
+          const sock = getSock();
+          if (sock) {
+            const serviceEmail = (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '').trim();
+            await sendWithDelay(sock, `${phone}@s.whatsapp.net`,
+              `⚠️ I can't access your inventory spreadsheet anymore.\n\n` +
+              `Please make sure it's shared with:\n${serviceEmail || '(your service account email)'}\n\n` +
+              `Buyers won't see your products until this is fixed.`
+            );
+          }
+        }
+        return [];
+      }
+      throw err;
+    }
   }
   return db.getInventoryDbAll(vendor.id);
 }
@@ -64,9 +111,10 @@ async function addItems(vendor, items) {
   if (!vendor || !items || items.length === 0) return;
   if (useSheets(vendor)) {
     await sheets.addItemsToSheet(vendor.sheet_id || vendor.sheetId, vendor.sheet_tab || 'Sheet1', items);
-    return;
+  } else {
+    await db.addItemsDb(vendor.id, items);
   }
-  await db.addItemsDb(vendor.id, items);
+  inventoryCache.invalidate(vendor.id);
 }
 
 async function decrementQty(vendor, sku) {
@@ -76,6 +124,7 @@ async function decrementQty(vendor, sku) {
   } else {
     res = await db.decrementQtyDb(vendor.id, sku);
   }
+  inventoryCache.invalidate(vendor.id);
   const newQty = res && typeof res.newQty === 'number' ? res.newQty : null;
   if (newQty != null) await maybeNotifyLowStock(vendor, sku, newQty);
   return res;
@@ -88,6 +137,7 @@ async function updateItemQty(vendor, sku, newQty) {
   } else {
     qty = await db.updateItemQtyDb(vendor.id, sku, newQty);
   }
+  inventoryCache.invalidate(vendor.id);
   if (qty != null) await maybeNotifyLowStock(vendor, sku, Number(qty));
   return qty;
 }
@@ -118,5 +168,6 @@ module.exports = {
   updateItemPrice,
   setItemImage,
   setItemDescription,
-  useSheets
+  useSheets,
+  get inventoryCache() { return inventoryCache; }
 };

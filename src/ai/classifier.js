@@ -180,8 +180,18 @@ async function extractOffer(message) {
   }
 }
 
+const { searchInMemoryInventory } = require('../inventory/search');
+
 async function matchProducts(message, inventory) {
   if (!inventory.length) return [];
+
+  // Fast path: score-based in-memory search for clear product-like queries
+  const trimmed = (message || '').trim();
+  if (trimmed.length >= 2 && trimmed.length <= 80) {
+    const fast = searchInMemoryInventory(trimmed, inventory);
+    if (fast.length === 1) return fast;
+    if (fast.length > 1 && trimmed.length <= 40) return fast.slice(0, 5);
+  }
 
   const catalog = inventory.map((item, i) =>
     `  ${i}: ${item.name} (${item.category || 'general'})`
@@ -259,6 +269,9 @@ function inferListContextIntent(userMessage, listItemNames = []) {
   if (/^(first|second|third|1st|2nd|3rd)\s*one|number\s*[1-9]|option\s*[1-9]|(the\s*)?(first|second|third|one|that one|this one)$/i.test(t)) return 'SELECT_ITEM';
   const nameFromList = listItemNames.length && listItemNames.some(name => name && t.includes((name || '').toLowerCase().slice(0, 8)));
   if (nameFromList) return 'SELECT_ITEM';
+  // "I need a phone", "looking for a shirt" → re-match so we show only that category
+  if (/\b(need|want|looking for|get me|find|show me)\b.*\b(phone|shirt|tee|clothes|sneaker|shoe|bag)\b/i.test(t)) return 'NEW_QUESTION';
+  if (/\b(phone|iphone|pixel|samsung|shirt|tee|clothes)\b/i.test(t) && t.length > 6) return 'NEW_QUESTION';
   return null;
 }
 

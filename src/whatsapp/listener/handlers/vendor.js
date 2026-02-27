@@ -35,42 +35,164 @@ const VENDOR_FALLBACK_LINES = [
 
 const PENDING_IMAGE_TTL_MS = 5 * 60 * 1000;
 const pendingImageFor = new Map();
+const PENDING_PRODUCT_IMAGE_TTL_MS = 5 * 60 * 1000;
+const pendingProductWithImage = new Map();
 
 async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
+  const trimmed = (text || '').trim();
+  const upper = trimmed.toUpperCase();
+  const lower = trimmed.toLowerCase();
+
+  // Confirm or cancel pending "product with photo" (caption-parsed item awaiting YES/NO)
+  const pendingProduct = pendingProductWithImage.get(vendorJid);
+  if (pendingProduct && Date.now() - pendingProduct.at < PENDING_PRODUCT_IMAGE_TTL_MS && trimmed) {
+    if (/^(yes|y|yeah|yep)\s*[.!?]*$/i.test(trimmed)) {
+      const { item, imageUrl } = pendingProduct;
+      if (item && imageUrl) item.image_url = imageUrl;
+      await addItems(vendor, [pendingProduct.item]);
+      pendingProductWithImage.delete(vendorJid);
+      const name = pendingProduct.item.name || 'Item';
+      await sendWithDelay(sock, vendorJid, `✅ ${name} is live in your store. Buyers will see the photo when they ask about it.`);
+      logReply('[Vendor product with photo saved]');
+      return;
+    }
+    if (/^(no|n|nope|cancel)\s*[.!?]*$/i.test(trimmed)) {
+      pendingProductWithImage.delete(vendorJid);
+      await sendWithDelay(sock, vendorJid, 'No problem. Send the photo again with a different caption if you like.');
+      return;
+    }
+  }
+
   if (msg.message.imageMessage) {
-    const pending = pendingImageFor.get(vendorJid);
-    if (pending && Date.now() - pending.at < PENDING_IMAGE_TTL_MS) {
-      const baseUrl = (process.env.PUBLIC_IMAGE_BASE_URL || '').trim().replace(/\/$/, '');
-      if (!baseUrl) {
-        pendingImageFor.delete(vendorJid);
-        await sendWithDelay(sock, vendorJid, 'Photo upload not configured. Use *image: item, https://...* with a direct image link (e.g. from imgur).');
-        logReply('[pending image: no base URL]');
+    const { downloadWhatsAppMedia } = require('../../../media/downloader');
+    const { uploadImageToCloudinary, isConfigured: cloudinaryConfigured } = require('../../../media/cloudinary');
+
+    const buffer = await downloadWhatsAppMedia(msg, sock);
+    if (!buffer) {
+      await sendWithDelay(sock, vendorJid, 'Could not download the photo. Try again or use *image: item, https://...* with a direct link.');
+      return;
+    }
+
+    const caption = (msg.message.imageMessage.caption || '').trim();
+
+    if (caption) {
+      const { parseSingleItem } = require('../../../inventory/parser');
+      const item = await parseSingleItem(caption, vendor.category);
+      if (item) {
+        let imageUrl = null;
+        if (cloudinaryConfigured()) {
+          try {
+            const sku = (item.sku || item.name || 'item').trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+            imageUrl = await uploadImageToCloudinary(buffer, vendor.id, sku);
+          } catch (e) {
+            console.error('[MEDIA] Cloudinary upload failed:', e.message);
+          }
+        } else {
+          const baseUrl = (process.env.PUBLIC_IMAGE_BASE_URL || '').trim().replace(/\/$/, '');
+          if (baseUrl) {
+            const uploadsDir = path.join(process.cwd(), 'uploads');
+            if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+            const safeSku = String(item.sku || item.name || 'item').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+            const filename = `${vendor.id}_${safeSku}.jpg`;
+            fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+            imageUrl = `${baseUrl}/uploads/${filename}`;
+          }
+        }
+        pendingProductWithImage.set(vendorJid, {
+          item,
+          imageUrl,
+          at: Date.now()
+        });
+        const photoLine = imageUrl ? '\n📸 Photo saved ✅' : '';
+        await sendWithDelay(sock, vendorJid,
+          `Got it! Here's what I captured:\n\n` +
+          `📦 ${item.name}\n` +
+          `💰 ₦${Number(item.price || 0).toLocaleString()}\n` +
+          `🔢 Qty: ${item.quantity || 1}` +
+          `${photoLine}\n\n` +
+          `Save this item? *YES* or *NO*`
+        );
+        logReply('[Vendor image+caption → confirm]');
         return;
       }
-      try {
-        const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
-        const stream = await downloadContentFromMessage(msg.message.imageMessage, 'image', {});
-        const chunks = [];
-        for await (const chunk of stream) chunks.push(chunk);
-        const buffer = Buffer.concat(chunks);
-        const uploadsDir = path.join(process.cwd(), 'uploads');
-        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-        const safeSku = String(pending.sku).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-        const filename = `${vendor.id}_${safeSku}.jpg`;
-        const filepath = path.join(uploadsDir, filename);
-        fs.writeFileSync(filepath, buffer);
-        const imageUrl = `${baseUrl}/uploads/${filename}`;
+    }
+
+    const pending = pendingImageFor.get(vendorJid);
+    if (pending && Date.now() - pending.at < PENDING_IMAGE_TTL_MS) {
+      let imageUrl = null;
+      if (cloudinaryConfigured()) {
+        try {
+          imageUrl = await uploadImageToCloudinary(buffer, vendor.id, pending.sku);
+        } catch (e) {
+          console.error('[MEDIA] Cloudinary upload failed:', e.message);
+        }
+      }
+      if (!imageUrl) {
+        const baseUrl = (process.env.PUBLIC_IMAGE_BASE_URL || '').trim().replace(/\/$/, '');
+        if (baseUrl) {
+          const uploadsDir = path.join(process.cwd(), 'uploads');
+          if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+          const safeSku = String(pending.sku).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+          const filename = `${vendor.id}_${safeSku}.jpg`;
+          fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+          imageUrl = `${baseUrl}/uploads/${filename}`;
+        }
+      }
+      if (imageUrl) {
         await setItemImage(vendor, pending.sku, imageUrl);
         pendingImageFor.delete(vendorJid);
         await sendWithDelay(sock, vendorJid, `Image set ✅ for ${pending.itemName}. Buyers will see the photo.`);
         logReply('[Vendor image uploaded]');
-      } catch (err) {
-        console.error('[LISTENER] Vendor image upload error:', err.message);
+      } else {
         pendingImageFor.delete(vendorJid);
-        await sendWithDelay(sock, vendorJid, 'Could not save the photo. Try *image: item, https://...* with a direct image link instead.');
+        await sendWithDelay(sock, vendorJid, 'Photo upload not configured. Set CLOUDINARY_* or PUBLIC_IMAGE_BASE_URL, or use *image: item, https://...*');
       }
       return;
     }
+
+    if (!caption) {
+      const inventory = await getInventory(vendor);
+      const list = (inventory || []).slice(0, 5).map((it, i) => `${i + 1}. ${it.name}`).join('\n');
+      await sendWithDelay(sock, vendorJid,
+        `I got the photo 📸\n\n` +
+        (list ? `Which product is this for?\n\n${list}\n\nOr send the photo again *with a caption* like: *Black Bag ₦15,000 x10*` : `Send it again *with a caption* like: *Black Bag ₦15,000 x10* to add a new product.`)
+      );
+      return;
+    }
+  }
+
+  if (msg.message.videoMessage) {
+    const videoMessage = msg.message.videoMessage;
+    const fileLength = videoMessage.fileLength || 0;
+    const fileSizeMB = fileLength / (1024 * 1024);
+    if (fileSizeMB > 50) {
+      await sendWithDelay(sock, vendorJid,
+        `That video is too large (${Math.round(fileSizeMB)}MB).\n\nPlease send videos under 50MB or share a YouTube/TikTok link instead.`
+      );
+      return;
+    }
+    const { downloadWhatsAppMedia } = require('../../../media/downloader');
+    const { uploadVideoToCloudinary, isConfigured: cloudinaryConfigured } = require('../../../media/cloudinary');
+    const buffer = await downloadWhatsAppMedia(msg, sock);
+    if (buffer && cloudinaryConfigured()) {
+      try {
+        const url = await uploadVideoToCloudinary(buffer, vendor.id, `vid_${Date.now()}`);
+        if (url) {
+          const inventory = await getInventory(vendor);
+          const list = (inventory || []).slice(0, 5).map((it, i) => `${i + 1}. ${it.name}`).join('\n');
+          await sendWithDelay(sock, vendorJid,
+            `Video received ✅\n\nWhich product is this for?\n\n${list || 'Add an item first, then send the video again.'}`
+          );
+          logReply('[Vendor video uploaded, awaiting product]');
+        }
+      } catch (e) {
+        console.error('[MEDIA] Video upload failed:', e.message);
+        await sendWithDelay(sock, vendorJid, 'Could not upload the video. Try a shorter clip or a link.');
+      }
+    } else {
+      await sendWithDelay(sock, vendorJid, 'Video upload needs Cloudinary (set CLOUDINARY_* env). For now you can share a YouTube or TikTok link.');
+    }
+    return;
   }
 
   if (msg.message.audioMessage || msg.message.pttMessage) {
@@ -103,6 +225,29 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
     return;
   }
 
+  const { detectBulkMessage, parseBulkInventory, parseSingleItem } = require('../../../inventory/parser');
+  const isForwarded = msg.message?.extendedTextMessage?.contextInfo?.isForwarded === true;
+  const forwardedText = (msg.message?.extendedTextMessage?.text || '').trim();
+  if (isForwarded && forwardedText) {
+    const items = await parseBulkInventory(forwardedText, vendor);
+    if (items.length > 0) {
+      await addItems(vendor, items);
+      const summary = items.map(i => `• ${i.name} — ₦${Number(i.price).toLocaleString()} (${i.quantity})`).join('\n');
+      await sendWithDelay(sock, vendorJid, `Added from forwarded message ✅ ${items.length} item(s)\n\n${summary}`);
+      logReply('[Vendor forwarded → inventory added]');
+      return;
+    }
+  }
+  if (text && detectBulkMessage(text)) {
+    const items = await parseBulkInventory(text, vendor);
+    if (items.length > 0) {
+      await addItems(vendor, items);
+      const summary = items.map(i => `• ${i.name} — ₦${Number(i.price).toLocaleString()} (${i.quantity})`).join('\n');
+      await sendWithDelay(sock, vendorJid, `Added ${items.length} item(s) ✅\n\n${summary}`);
+      logReply('[Vendor bulk list → inventory added]');
+      return;
+    }
+  }
   if (vendor.onboarding_step && vendor.onboarding_step !== 'complete') {
     const handled = await handleOnboarding(sock, vendorJid, text, vendor);
     if (handled) return;
@@ -126,10 +271,6 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
     logReply(reply);
     return;
   }
-
-  const trimmed = (text || '').trim();
-  const upper = trimmed.toUpperCase();
-  const lower = trimmed.toLowerCase();
 
   // Vendor profile / settings overview (always read latest from DB by whatsapp_number so NAME: changes show immediately)
   if (upper === 'PROFILE' || upper === 'SETTINGS') {

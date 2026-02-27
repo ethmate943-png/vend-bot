@@ -1,6 +1,20 @@
 require('dotenv').config();
 const OpenAI = require('openai').default;
 const { getExamplesBlock, getAntiConfusionBlock, getHumanStyleBlock, sanitizeReply } = require('./voice-examples');
+const { upsertSessionFields } = require('../sessions/manager');
+
+/** Find the first inventory item clearly mentioned in text (by name or sku). Prefer longest name match. */
+function findItemInText(text, inventory) {
+  if (!text || !inventory || !inventory.length) return null;
+  const norm = (s) => String(s || '').toLowerCase().trim();
+  const t = norm(text);
+  const byLen = [...inventory].filter(i => i.name && i.quantity > 0).sort((a, b) => (b.name?.length || 0) - (a.name?.length || 0));
+  for (const item of byLen) {
+    if (norm(item.name) && t.includes(norm(item.name))) return item;
+    if (item.sku && t.includes(norm(item.sku))) return item;
+  }
+  return null;
+}
 
 const kimiBaseUrl = (process.env.KIMI_BASE_URL || '').trim().replace(/\/$/, '');
 const kimi = process.env.KIMI_API_KEY && kimiBaseUrl
@@ -80,6 +94,34 @@ CONVERSATION RULES:
 You represent ${name}. Every reply reflects on them. Be sharp, be honest, be brief.`;
 }
 
+/** Rule-based fallback when AI (Kimi/Groq) is down. */
+function buildRuleBasedResponse(message, inventory, vendorOrName, sessionContext = {}) {
+  const vendor = typeof vendorOrName === 'object' && vendorOrName ? vendorOrName : null;
+  const vendorName = vendor ? vendor.business_name : String(vendorOrName || 'the store');
+  const upper = (message || '').toUpperCase();
+
+  if (/how much|price|cost|₦/i.test(message || '')) {
+    if (sessionContext?.last_item_name && sessionContext?.last_item_price != null) {
+      return `${sessionContext.last_item_name} is ₦${Number(sessionContext.last_item_price).toLocaleString()}.`;
+    }
+    if (inventory && inventory.length > 0) {
+      return inventory.slice(0, 3)
+        .map(i => `${i.name} — ₦${(i.price || 0).toLocaleString()}`)
+        .join('\n');
+    }
+  }
+
+  if (/available|in stock|you get|you have/i.test(message || '')) {
+    const available = (inventory || []).filter(i => (i.quantity || 0) > 0);
+    if (available.length === 0) return `We're currently out of stock. Check back soon.`;
+    return `We currently have:\n` + available.slice(0, 5)
+      .map(i => `• ${i.name} — ₦${(i.price || 0).toLocaleString()}`)
+      .join('\n');
+  }
+
+  return `I'm having a brief technical issue. Please try again in a moment or contact ${vendorName} directly.`;
+}
+
 /** vendorOrName: full vendor object (with category, location, tone, etc.) or string business name for legacy. */
 async function generateReply(buyerMessage, inventory, vendorOrName, history = [], sessionContext = {}) {
   const vendor = typeof vendorOrName === 'object' && vendorOrName && vendorOrName.business_name != null
@@ -100,6 +142,11 @@ async function generateReply(buyerMessage, inventory, vendorOrName, history = []
     ? sessionContext.conversation_history
     : (history && history.length) ? history.map(m => ({ role: m.role === 'buyer' ? 'user' : 'assistant', content: m.text })) : [];
   const lastFour = conversationHistory.slice(-4);
+
+  if (conversationHistory.length === 0 && (sessionContext?.message_count || 0) > 2) {
+    console.error('[RESPONDER] WARNING: History empty but message_count > 2');
+  }
+  console.log(`[RESPONDER] History length: ${conversationHistory.length}`);
 
   const lastItem = sessionContext.last_item_name;
   const lastPrice = sessionContext.last_item_price;
@@ -164,37 +211,60 @@ async function generateReply(buyerMessage, inventory, vendorOrName, history = []
   };
 
   let raw = '';
-  if (kimi) {
-    try {
-      const messages = [
-        { role: 'system', content: systemPromptKimi },
-        ...lastFour.map(ex => ({
-          role: ex.role === 'buyer' || ex.role === 'user' ? 'user' : 'assistant',
-          content: ex.content || ex.text
-        })),
-        { role: 'user', content: buyerMessage }
-      ];
-      const res = await kimi.chat.completions.create({
-        model,
-        max_tokens: maxReplyTokens,
-        temperature: 0.6,
-        messages
-      });
-      raw = (res.choices[0].message.content || '').trim();
-    } catch (err) {
-      if (is404(err)) {
-        console.warn('[responder] Kimi returned 404, using Groq. Deploy the model at https://build.nvidia.com and set KIMI_MODEL=moonshotai/kimi-k2.5');
-        raw = await runGroq();
-      } else {
-        throw err;
+  try {
+    if (kimi) {
+      try {
+        const messages = [
+          { role: 'system', content: systemPromptKimi },
+          ...lastFour.map(ex => ({
+            role: ex.role === 'buyer' || ex.role === 'user' ? 'user' : 'assistant',
+            content: ex.content || ex.text
+          })),
+          { role: 'user', content: buyerMessage }
+        ];
+        const res = await kimi.chat.completions.create({
+          model,
+          max_tokens: maxReplyTokens,
+          temperature: 0.6,
+          messages
+        });
+        raw = (res.choices[0].message.content || '').trim();
+      } catch (err) {
+        if (is404(err)) {
+          console.warn('[responder] Kimi returned 404, using Groq. Deploy the model at https://build.nvidia.com and set KIMI_MODEL=moonshotai/kimi-k2.5');
+          raw = await runGroq();
+        } else {
+          throw err;
+        }
+      }
+    } else {
+      raw = await runGroq();
+    }
+
+    const out = sanitizeReply(raw, vendorName);
+    const finalReply = out !== null ? out : raw;
+
+    // If reply mentions a specific item, lock it into session so "I want it" has context
+    const mentionedItem = findItemInText(finalReply, inventory);
+    if (mentionedItem && sessionContext?.buyer_jid && sessionContext?.vendor_id) {
+      try {
+        await upsertSessionFields(sessionContext.buyer_jid, sessionContext.vendor_id, {
+          last_item_name: mentionedItem.name,
+          last_item_sku: mentionedItem.sku,
+          last_item_price: mentionedItem.price,
+          last_item_price_quoted_at: new Date().toISOString(),
+          intent_state: 'querying'
+        });
+      } catch (e) {
+        console.error('[RESPONDER] Failed to write mentioned item to session:', e.message);
       }
     }
-  } else {
-    raw = await runGroq();
-  }
 
-  const out = sanitizeReply(raw, vendorName);
-  return out !== null ? out : raw;
+    return finalReply;
+  } catch (err) {
+    console.error('[RESPONDER] Kimi/Groq failed:', err.message);
+    return buildRuleBasedResponse(buyerMessage, inventory, vendorOrName, sessionContext);
+  }
 }
 
 /**
@@ -274,4 +344,4 @@ async function generateCatalogReply(buyerMessage, inventory, vendorOrName, histo
   return generateReply(buyerMessage, inventory, vendorOrName, history, sessionContext);
 }
 
-module.exports = { generateReply, generateCancelReply, generateCatalogReply };
+module.exports = { generateReply, generateCancelReply, generateCatalogReply, buildRuleBasedResponse };

@@ -1,6 +1,7 @@
 const { query } = require('../db');
-const { decrementQty } = require('../inventory/manager');
+const { decrementQty, getInventory } = require('../inventory/manager');
 const { sendWithDelay } = require('../whatsapp/sender');
+const { processRefund } = require('./paystack');
 const { queuePendingReceipt } = require('./receipt-data');
 const { upsertBuyerAndRelationship, checkAndFlagVip } = require('../crm/manager');
 const {
@@ -16,7 +17,7 @@ const {
   getTierHoldMultiplier,
   getVendorBadgeLine
 } = require('../verified-vendor');
-const { upsertSession } = require('../sessions/manager');
+const { upsertSession, getSession } = require('../sessions/manager');
 
 function getSock() {
   return require('../whatsapp/client').getSock();
@@ -143,6 +144,88 @@ async function handlePaymentSuccess(data) {
     return;
   }
 
+  // Zero amount — block and alert
+  if (!txn.amount || Number(txn.amount) <= 0) {
+    console.error('[PAYMENT] Zero amount for', reference, '— blocking');
+    if (sock) {
+      await sendWithDelay(sock, txn.buyer_jid,
+        `There's an issue with this item's price. Please contact the vendor directly.`
+      );
+    }
+    const adminJid = process.env.DISPUTE_WHATSAPP_NUMBER || process.env.ADMIN_WHATSAPP;
+    if (adminJid && sock) {
+      await sendWithDelay(sock, `${String(adminJid).replace(/\D/g, '')}@s.whatsapp.net`,
+        `[VendBot] Zero amount payment attempted — ref: ${reference}`
+      );
+    }
+    return;
+  }
+
+  // Duplicate payment — same buyer + vendor + item within 10 mins: refund this one
+  const txnCreated = new Date(txn.created_at).getTime();
+  const tenMinBeforeTxn = new Date(txnCreated - 10 * 60 * 1000).toISOString();
+  const dupRes = await query(
+    `SELECT id, mono_ref FROM transactions
+     WHERE buyer_jid = $1 AND vendor_id = $2 AND item_sku = $3
+       AND status = 'paid' AND id != $4
+       AND created_at >= $5 AND created_at < $6`,
+    [txn.buyer_jid, txn.vendor_id, txn.item_sku, txn.id, tenMinBeforeTxn, txn.created_at]
+  );
+  const originalTxn = dupRes.rows && dupRes.rows[0];
+  if (originalTxn) {
+    try {
+      await processRefund(reference);
+      if (sock) {
+        await sendWithDelay(sock, txn.buyer_jid,
+          `We noticed a duplicate payment of ₦${(txn.amount / 100).toLocaleString()} and have refunded it automatically.\n\n` +
+          `Your original order is confirmed ✅\nRef: ${originalTxn.mono_ref}`
+        );
+      }
+      console.log('[PAYMENT] Duplicate payment refunded:', reference);
+    } catch (err) {
+      console.error('[PAYMENT] Refund failed for duplicate', reference, err.message);
+    }
+    return;
+  }
+
+  // Sold-out check — before decrementing, ensure item(s) still in stock
+  const vendorForInv = { id: txn.vendor_id, sheet_id: txn.sheet_id, sheet_tab: txn.sheet_tab, whatsapp_number: txn.whatsapp_number };
+  let inventory = [];
+  try {
+    inventory = await getInventory(vendorForInv);
+  } catch (e) {
+    console.error('[PAYMENT] getInventory failed for sold-out check:', e.message);
+  }
+  const cartItems = txn.cart_items_json ? (() => { try { return JSON.parse(txn.cart_items_json); } catch { return null; } })() : null;
+  const skusToCheck = cartItems && Array.isArray(cartItems)
+    ? cartItems.map(l => l.sku).filter(Boolean)
+    : [txn.item_sku];
+  for (const sku of skusToCheck) {
+    const item = inventory.find(i => i.sku === sku);
+    const qty = item && typeof item.quantity === 'number' ? item.quantity : 0;
+    if (qty <= 0) {
+      try {
+        await processRefund(reference);
+      } catch (err) {
+        console.error('[PAYMENT] Refund failed for sold-out', reference, err.message);
+      }
+      if (sock) {
+        await sendWithDelay(sock, txn.buyer_jid,
+          `We're really sorry — *${txn.item_name}* just sold out while your payment was processing.\n\n` +
+          `We've refunded ₦${(txn.amount / 100).toLocaleString()} immediately. It should reflect within minutes.\n\n` +
+          `Here's what else we have in stock:`
+        );
+        const available = inventory.filter(i => i.quantity > 0).slice(0, 8);
+        if (available.length > 0) {
+          const list = available.map(i => `• ${i.name} — ₦${(i.price || 0).toLocaleString()}`).join('\n');
+          await sendWithDelay(sock, txn.buyer_jid, list);
+        }
+      }
+      console.log('[PAYMENT] Sold-out refund:', reference, 'sku:', sku);
+      return;
+    }
+  }
+
   if (!sock) {
     console.error('[PAYMENT] Cannot send receipt now: WhatsApp not connected (sock is null). Queueing for retry for ref:', reference);
     queuePendingReceipt(reference, receiptNumber);
@@ -261,13 +344,18 @@ async function handlePaymentSuccess(data) {
     }
 
     try {
+      const buyerSession = await getSession(txn.buyer_jid, txn.vendor_id);
+      const buyerDisplay = (buyerSession && buyerSession.buyer_name)
+        ? buyerSession.buyer_name.trim()
+        : `+${(txn.buyer_phone || '').replace(/\D/g, '')}`;
+      const buyerPhone = (txn.buyer_phone || '').replace(/\D/g, '');
       await sendWithDelay(sock, `${txn.whatsapp_number}@s.whatsapp.net`,
         `🛍️ *New Sale!*\n\n` +
+        `*Customer:* ${buyerDisplay}\n` +
         `*Item:* ${txn.item_name}\n` +
         `*Amount:* ${amountFormatted}\n` +
-        `*Buyer:* ${txn.buyer_phone}\n` +
         `*Ref:* ${reference}\n\n` +
-        `👇 Open buyer chat:\nwa.me/${(txn.buyer_phone || '').replace(/\D/g, '')}\n\n` +
+        `👇 Chat: wa.me/${buyerPhone}\n\n` +
         `Reply:\n*DELIVERED* — mark delivered\n*TOMORROW* — delivering tomorrow\n*ISSUE* — flag problem\n*DETAILS* — buyer history`
       );
     } catch (err) {

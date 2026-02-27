@@ -4,12 +4,20 @@
  */
 const { query } = require('../db');
 
+// Normalise buyer JID so phone + linked device share one cart.
+function canonicalBuyerJid(jid) {
+  if (!jid || typeof jid !== 'string') return jid;
+  const phone = jid.replace(/@s\.whatsapp\.net$/i, '').replace(/@lid.*$/i, '').replace(/\D/g, '');
+  return phone ? `${phone}@s.whatsapp.net` : jid;
+}
+
 async function getCart(buyerJid, vendorId) {
+  const c = canonicalBuyerJid(buyerJid);
   const res = await query(
     `SELECT sku, name, price_kobo, quantity FROM cart_items
      WHERE buyer_jid = $1 AND vendor_id = $2 AND quantity > 0
      ORDER BY added_at`,
-    [buyerJid, vendorId]
+    [c, vendorId]
   );
   return (res.rows || []).map((r) => ({
     sku: r.sku,
@@ -21,6 +29,7 @@ async function getCart(buyerJid, vendorId) {
 
 /** Add or bump quantity. item: { sku, name, price }, qty default 1. */
 async function addToCart(buyerJid, vendorId, item, qty = 1) {
+  const c = canonicalBuyerJid(buyerJid);
   const sku = (item.sku || item.name || '').trim();
   const name = (item.name || '').trim();
   const priceKobo = Math.max(0, Math.floor(Number(item.price) || 0) * 100);
@@ -33,20 +42,21 @@ async function addToCart(buyerJid, vendorId, item, qty = 1) {
        quantity = cart_items.quantity + EXCLUDED.quantity,
        name = EXCLUDED.name,
        price_kobo = EXCLUDED.price_kobo`,
-    [buyerJid, vendorId, sku, name, priceKobo, quantity]
+    [c, vendorId, sku, name, priceKobo, quantity]
   );
 }
 
 /** Set quantity for one SKU. 0 = remove. */
 async function updateCartItem(buyerJid, vendorId, sku, quantity) {
+  const c = canonicalBuyerJid(buyerJid);
   const qty = Math.max(0, Math.floor(Number(quantity) || 0));
   if (qty === 0) {
-    await query('DELETE FROM cart_items WHERE buyer_jid = $1 AND vendor_id = $2 AND sku = $3', [buyerJid, vendorId, sku]);
+    await query('DELETE FROM cart_items WHERE buyer_jid = $1 AND vendor_id = $2 AND sku = $3', [c, vendorId, sku]);
     return;
   }
   await query(
     'UPDATE cart_items SET quantity = $4 WHERE buyer_jid = $1 AND vendor_id = $2 AND sku = $3',
-    [buyerJid, vendorId, sku, qty]
+    [c, vendorId, sku, qty]
   );
 }
 
@@ -55,14 +65,16 @@ async function removeFromCart(buyerJid, vendorId, sku) {
 }
 
 async function clearCart(buyerJid, vendorId) {
-  await query('DELETE FROM cart_items WHERE buyer_jid = $1 AND vendor_id = $2', [buyerJid, vendorId]);
+  const c = canonicalBuyerJid(buyerJid);
+  await query('DELETE FROM cart_items WHERE buyer_jid = $1 AND vendor_id = $2', [c, vendorId]);
 }
 
 /** Total amount in kobo for checkout. */
 async function getCartTotalKobo(buyerJid, vendorId) {
+  const c = canonicalBuyerJid(buyerJid);
   const res = await query(
     'SELECT COALESCE(SUM(price_kobo * quantity), 0) AS total FROM cart_items WHERE buyer_jid = $1 AND vendor_id = $2',
-    [buyerJid, vendorId]
+    [c, vendorId]
   );
   return Number(res.rows[0]?.total || 0);
 }

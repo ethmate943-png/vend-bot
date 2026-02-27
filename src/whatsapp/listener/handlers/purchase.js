@@ -6,7 +6,7 @@ const { alreadyHaveLink, dailyCap, paymentFailed, paymentIntro, vendorUnavailabl
 const { generatePaymentLink, checkVendorCap, checkDuplicatePayment } = require('../../../payments/paystack');
 const { getVendorBadgeLineForPayment } = require('../../../verified-vendor');
 const { checkVelocity } = require('../../../safety/velocity');
-const { upsertSession } = require('../../../sessions/manager');
+const { upsertSession, upsertSessionFields } = require('../../../sessions/manager');
 const { query } = require('../../../db');
 const { isVendorTrustedBuyer, getTrustedBuyerDisplayName, createPendingTrustOrder } = require('../../../trust/manager');
 
@@ -127,9 +127,11 @@ async function handlePurchase(sock, buyerJid, vendor, session, item, negotiatedP
     await sendWithDelay(sock, buyerJid, payMsg);
     logReply(payMsg);
 
-    await upsertSession(buyerJid, vendor.id, {
+    // State write AFTER send — never parallel, never fire-and-forget
+    await upsertSessionFields(buyerJid, vendor.id, {
       intent_state: 'awaiting_payment',
       pending_payment_ref: reference,
+      payment_link_sent_at: new Date().toISOString(),
       last_item_sku: item.sku,
       last_item_name: item.name,
       last_item_price: finalPrice,
@@ -159,7 +161,10 @@ async function handlePurchase(sock, buyerJid, vendor, session, item, negotiatedP
     }, delayMs);
   } catch (err) {
     console.error('[PAYMENT ERROR]', err.response?.data || err.message);
-    await sendWithDelay(sock, buyerJid, paymentFailed());
+    await sendWithDelay(sock, buyerJid,
+      `Sorry, something went wrong generating your payment link. ` +
+      `Please try again — just say "I want to buy" or "send link" again.`
+    );
   }
 }
 

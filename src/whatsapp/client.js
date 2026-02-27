@@ -16,6 +16,12 @@ let retryCount = 0;
 let connectedAt = 0;
 const MAX_RETRIES = 5;
 
+function useCloudApi() {
+  return process.env.WHATSAPP_PROVIDER === 'cloud-api' ||
+    process.env.USE_WHATSAPP_CLOUD_API === '1' ||
+    process.env.USE_WHATSAPP_CLOUD_API === 'true';
+}
+
 // Known Baileys noise (groups/decrypt/ack) — show one line instead of full JSON
 const NOISE_PATTERNS = [
   /failed to decrypt message|No session found to decrypt/,
@@ -62,6 +68,13 @@ function setOnConnected(cb) {
 }
 
 async function startBot() {
+  if (useCloudApi()) {
+    const cloud = require('./cloud-api');
+    cloud.setMessageHandler(messageHandler);
+    cloud.setOnConnected(onConnectedCallback);
+    return cloud.start();
+  }
+
   const authPath = process.env.NODE_ENV === 'production'
     ? '/app/auth_info_baileys'
     : 'auth_info_baileys';
@@ -205,6 +218,9 @@ async function startBot() {
   return sock;
 }
 
-function getSock() { return sock; }
+function getSock() {
+  if (useCloudApi()) return require('./cloud-api').getSock();
+  return sock;
+}
 
 module.exports = { startBot, getSock, setMessageHandler, setOnConnected };

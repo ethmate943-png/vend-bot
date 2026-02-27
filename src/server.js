@@ -7,6 +7,7 @@ const { verifyTransaction } = require('./payments/mono');
 const { getReceiptData } = require('./payments/receipt-data');
 const { getState } = require('./whatsapp/qr-store');
 const { query } = require('./db');
+const { runSystemChecks } = require('./health/system-checks');
 
 const path = require('path');
 const fs = require('fs');
@@ -24,6 +25,24 @@ app.get('/health', (_, res) => res.json({
   service: 'vendbot',
   timestamp: new Date().toISOString()
 }));
+
+app.get('/health/systems', async (_, res) => {
+  try {
+    const checks = await runSystemChecks();
+    const allGreen = checks.db && checks.groq && (checks.paystack !== false) && (checks.inventory === null || checks.inventory >= 0);
+    res.json({
+      status: allGreen ? 'ok' : 'degraded',
+      timestamp: new Date().toISOString(),
+      checks
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      error: err.message
+    });
+  }
+});
 
 // QR page so phone users can scan WhatsApp without using the terminal
 app.get('/qr', async (req, res) => {
@@ -657,6 +676,30 @@ if (process.env.ENABLE_DEV_SIMULATE === '1' || process.env.ENABLE_DEV_SIMULATE =
     }
   });
 }
+
+// WhatsApp Cloud API webhook (for when WHATSAPP_PROVIDER=cloud-api)
+app.get('/webhook/whatsapp', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+  if (mode === 'subscribe' && verifyToken && token === verifyToken) {
+    return res.status(200).send(challenge);
+  }
+  res.status(403).send('Forbidden');
+});
+
+app.post('/webhook/whatsapp', express.json(), async (req, res) => {
+  res.status(200).send(); // Always 200 so Meta doesn't retry
+  const body = req.body;
+  if (!body || body.object !== 'whatsapp_business_account') return;
+  try {
+    const { receiveWebhookPayload } = require('./whatsapp/cloud-api');
+    await receiveWebhookPayload(body);
+  } catch (err) {
+    console.error('[WEBHOOK] WhatsApp Cloud:', err?.message || err);
+  }
+});
 
 // Catch-all: so wrong paths don't show "Cannot GET /route" (e.g. bad callback URL)
 app.use((req, res) => {

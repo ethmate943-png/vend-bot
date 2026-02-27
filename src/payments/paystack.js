@@ -143,4 +143,15 @@ async function checkDuplicatePayment(buyerJid, vendorId, itemSku) {
   return res.rows[0] || null;
 }
 
-module.exports = { generatePaymentLink, checkVendorCap, checkDuplicatePayment, verifyTransaction };
+/** Refund a transaction by reference (mono_ref). Used for duplicate/sold-out/zero-amount. */
+async function processRefund(reference) {
+  if (!reference) throw new Error('processRefund: reference required');
+  const res = await axios.post(
+    'https://api.paystack.co/refund',
+    { transaction: reference },
+    { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } }
+  );
+  return res.data;
+}
+
+module.exports = { generatePaymentLink, checkVendorCap, checkDuplicatePayment, verifyTransaction, processRefund };
