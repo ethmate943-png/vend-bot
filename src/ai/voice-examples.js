@@ -140,18 +140,23 @@ function sanitizeReply(reply, vendorName) {
   if (r.length > 520) r = r.slice(0, 517) + '…'; // generous cap so helpful replies aren't cut
   const lower = r.toLowerCase();
 
-  // If the model promises a payment link was sent when our flow may not actually send it,
-  // soften that to an invitation instead. This avoids "I'll send the link now" without a link.
+  // If the model promises a payment link was sent (or that it will send it now) when our flow
+  // may not actually send it, soften that to an invitation instead. This avoids
+  // "I'll send the link now" / "I go send you the payment link" without a real link.
   const linkPromisePatterns = [
     /i['’]ll send the payment link now/i,
     /i will send the payment link now/i,
     /sending the payment link now/i,
     /payment link has been sent/i,
-    /i['’]ve sent the payment link/i
+    /i['’]ve sent the payment link/i,
+    /i\s+go\s+send\s+(you\s+)?(the\s+)?payment link/i,
+    /let me\s+send\s+(you\s+)?(the\s+)?payment link/i,
+    /i['’]ll send (you\s+)?(the\s+)?link\s+now/i,
+    /i will send (you\s+)?(the\s+)?link\s+now/i
   ];
   if (linkPromisePatterns.some((re) => re.test(r))) {
     r = r.replace(
-      /i['’]ll send the payment link now|i will send the payment link now|sending the payment link now|payment link has been sent|i['’]ve sent the payment link/gi,
+      /i['’]ll send the payment link now|i will send the payment link now|sending the payment link now|payment link has been sent|i['’]ve sent the payment link|i\s+go\s+send\s+(you\s+)?(the\s+)?payment link|let me\s+send\s+(you\s+)?(the\s+)?payment link|i['’]ll send (you\s+)?(the\s+)?link\s+now|i will send (you\s+)?(the\s+)?link\s+now/gi,
       'I can send you the payment link when you\'re ready — just reply "send link"'
     );
   }

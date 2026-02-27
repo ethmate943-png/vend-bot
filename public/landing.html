@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MoovMart — The Market Never Closes</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500&family=Host+Grotesk:wght@300;400;500&display=swap" rel="stylesheet">
+    <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+    <style>
+        body { font-family: 'Figtree', sans-serif; background-color: #050505; color: #ffffff; }
+        h1, h2, h3, h4, h5, h6, .font-host { font-family: 'Host Grotesk', sans-serif; }
+        details > summary { list-style: none; }
+        details > summary::-webkit-details-marker { display: none; }
+        .bg-noise {
+            background-image: url('data:image/svg+xml,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="noiseFilter"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23noiseFilter)"/%3E%3C/svg%3E');
+            opacity: 0.04; mix-blend-mode: overlay;
+        }
+        .bg-dots {
+            background-image: radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px);
+            background-size: 32px 32px;
+        }
+        .text-gradient {
+            background: linear-gradient(180deg, #ffffff 0%, #a3a3a3 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        @keyframes marquee { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+        .animate-marquee { display: flex; width: 200%; animation: marquee 30s linear infinite; }
+        .reveal-up {
+            opacity: 0; transform: translateY(40px);
+            transition: opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .reveal-up.is-visible { opacity: 1; transform: translateY(0); }
+        .delay-100 { transition-delay: 100ms; } .delay-200 { transition-delay: 200ms; } .delay-300 { transition-delay: 300ms; }
+        .bento-card {
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.4s ease;
+        }
+        .bento-card:hover { transform: translateY(-4px); border-color: rgba(37, 211, 102, 0.3); }
+        .landing-step { display: none; }
+        .landing-step.active { display: block; }
+        .hero-anim {
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+    </style>
+</head>
+<body class="antialiased selection:bg-[#25D366] selection:text-black">
+
+    <div class="fixed inset-0 pointer-events-none z-[100] bg-noise"></div>
+
+    <nav class="fixed top-0 inset-x-0 z-50 bg-[#050505]/70 backdrop-blur-2xl border-b border-white/5 reveal-up is-visible">
+        <div class="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-none bg-[#25D366] flex items-center justify-center rotate-3">
+                    <iconify-icon icon="solar:bag-3-linear" class="text-xl text-black" stroke-width="1.5"></iconify-icon>
+                </div>
+                <span class="font-host text-2xl font-medium tracking-tighter text-white uppercase">MoovMart</span>
+            </div>
+            <div class="hidden md:flex items-center gap-3 text-xs uppercase tracking-[0.2em]">
+                <a href="#how-it-works" class="px-4 py-2 rounded-full border border-white/10 text-neutral-300 hover:text-black hover:bg-[#25D366] hover:border-[#25D366] transition-colors">How it Works</a>
+                <a href="#features" class="px-4 py-2 rounded-full border border-white/10 text-neutral-300 hover:text-black hover:bg-[#25D366] hover:border-[#25D366] transition-colors">Features</a>
+                <a href="#buyers" class="px-4 py-2 rounded-full border border-white/10 text-neutral-300 hover:text-black hover:bg-[#25D366] hover:border-[#25D366] transition-colors">For Buyers</a>
+                <a href="#pricing" class="px-4 py-2 rounded-full border border-white/10 text-neutral-300 hover:text-black hover:bg-[#25D366] hover:border-[#25D366] transition-colors">Pricing</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="relative pt-48 pb-24 md:pt-64 md:pb-40 overflow-hidden px-6 bg-dots" id="get-started">
+        <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-4xl h-[600px] bg-[#25D366]/10 blur-[150px] rounded-full pointer-events-none"></div>
+        <div class="max-w-5xl mx-auto text-center relative z-10">
+            <div class="reveal-up mb-6">
+                <div class="inline-flex items-center gap-3 px-5 py-2 text-xs uppercase tracking-[0.25em] bg-[#25D366] text-black rounded-full shadow-[0_0_40px_rgba(37,211,102,0.3)]">
+                    <span class="flex h-1.5 w-1.5 rounded-full bg-black/80 animate-pulse"></span>
+                    No website. No app. No setup.
+                </div>
+            </div>
+
+            <!-- Hero -->
+            <div class="space-y-6 mb-8 reveal-up delay-100">
+                <h1 id="hero-title" class="font-host text-5xl md:text-7xl font-medium tracking-tighter text-gradient leading-[0.95] mb-4">
+                    Turn your WhatsApp<br>into a store.
+                </h1>
+                <p id="hero-subtitle" class="text-lg md:text-2xl text-neutral-400 max-w-2xl mx-auto font-light tracking-tight">
+                    Drop your number. Get a store link. Buyers pay before delivery — all inside WhatsApp.
+                </p>
+            </div>
+
+            <!-- Step 1: WhatsApp number -->
+            <div id="step-1" class="landing-step active mt-14 max-w-lg mx-auto relative reveal-up delay-300">
+                <form id="form-number" class="relative flex flex-col sm:flex-row gap-2 bg-[#0a0a0a] p-2 rounded-none border border-white/15 shadow-2xl group focus-within:border-[#25D366]/50 transition-colors">
+                    <div class="relative flex-1 flex items-center">
+                        <div class="absolute left-5 flex items-center pointer-events-none text-neutral-500 text-lg font-normal">
+                            <iconify-icon icon="solar:phone-calling-linear" class="text-xl mr-2" stroke-width="1.5"></iconify-icon> +234
+                        </div>
+                        <input type="tel" id="input-phone" placeholder="WhatsApp Number" class="w-full bg-transparent py-4 pl-28 pr-4 text-lg text-white placeholder-neutral-600 focus:outline-none focus:ring-0" required>
+                    </div>
+                    <button type="submit" class="group bg-[#25D366] text-black font-medium rounded-none py-4 px-8 text-base tracking-wide hover:bg-white transition-all whitespace-nowrap flex items-center justify-center gap-3 transform hover:-translate-y-0.5 active:translate-y-0 active:scale-95">
+                        Get Link <iconify-icon icon="solar:arrow-right-linear" class="text-xl transition-transform duration-200 group-hover:translate-x-1 group-hover:-translate-y-0.5" stroke-width="1.5"></iconify-icon>
+                    </button>
+                </form>
+                <p class="text-xs uppercase tracking-widest text-neutral-500 mt-6">Free to start. We earn when you do.</p>
+            </div>
+
+            <!-- Step 2: Store name -->
+            <div id="step-2" class="landing-step mt-14 max-w-lg mx-auto relative">
+                <p class="text-neutral-400 mb-4">We’ll use this to generate your store code (e.g. “Amaka Fashion House” → <strong class="text-white">AMAKA</strong>).</p>
+                <form id="form-storename" class="relative flex flex-col sm:flex-row gap-2 bg-[#0a0a0a] p-2 rounded-none border border-white/15 shadow-2xl group focus-within:border-[#25D366]/50 transition-colors">
+                    <input type="text" id="input-storename" placeholder="Business / store name" class="flex-1 w-full bg-transparent py-4 px-5 text-lg text-white placeholder-neutral-600 focus:outline-none focus:ring-0" required>
+                    <button type="submit" class="group bg-[#25D366] text-black font-medium rounded-none py-4 px-8 text-base tracking-wide hover:bg-white transition-all whitespace-nowrap flex items-center justify-center gap-3 transform hover:-translate-y-0.5 active:translate-y-0 active:scale-95">
+                        Continue <iconify-icon icon="solar:arrow-right-linear" class="text-xl transition-transform duration-200 group-hover:translate-x-1 group-hover:-translate-y-0.5" stroke-width="1.5"></iconify-icon>
+                    </button>
+                </form>
+                <button type="button" id="back-to-step1" class="text-sm text-neutral-500 hover:text-white mt-4 underline">← Change number</button>
+            </div>
+
+            <!-- Step 3: Store code + Set up profile or Open WhatsApp -->
+            <div id="step-3" class="landing-step mt-14 max-w-lg mx-auto relative">
+                <div class="bg-[#0a0a0a] border border-[#25D366]/30 p-8 rounded-none">
+                    <p class="text-neutral-400 mb-2">Your store code</p>
+                    <p id="display-storecode" class="font-host text-4xl font-medium tracking-tighter text-[#25D366] mb-6">—</p>
+                    <p class="text-sm text-neutral-500 mb-6">Share this code so buyers can open your store. You can set up your full profile now or jump straight to WhatsApp.</p>
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <a id="btn-setup" href="#" target="_blank" rel="noopener noreferrer" class="group flex-1 bg-[#25D366] text-black font-medium rounded-none py-4 px-6 text-center hover:bg-white transition-all flex items-center justify-center gap-2 transform hover:-translate-y-0.5 active:translate-y-0 active:scale-95">
+                            Set up profile <iconify-icon icon="solar:settings-linear" class="text-xl transition-transform duration-200 group-hover:rotate-6 group-hover:-translate-y-0.5" stroke-width="1.5"></iconify-icon>
+                        </a>
+                        <a id="btn-whatsapp" href="#" target="_blank" rel="noopener noreferrer" class="group flex-1 bg-white/10 border border-white/20 text-white font-medium rounded-none py-4 px-6 text-center hover:bg-white/20 transition-all flex items-center justify-center gap-2 transform hover:-translate-y-0.5 active:translate-y-0 active:scale-95">
+                            Open in WhatsApp <iconify-icon icon="solar:chat-round-dots-linear" class="text-xl transition-transform duration-200 group-hover:translate-x-1 group-hover:-translate-y-0.5" stroke-width="1.5"></iconify-icon>
+                        </a>
+                    </div>
+                </div>
+                <button type="button" id="start-over" class="text-sm text-neutral-500 hover:text-white mt-4 underline">Start over with another number</button>
+            </div>
+        </div>
+
+        <div class="max-w-full overflow-hidden mt-32 pt-12 border-t border-white/10 relative reveal-up delay-300">
+            <div class="absolute inset-y-0 left-0 w-32 bg-gradient-to-r from-[#050505] to-transparent z-10"></div>
+            <div class="absolute inset-y-0 right-0 w-32 bg-gradient-to-l from-[#050505] to-transparent z-10"></div>
+            <div class="animate-marquee">
+                <div class="flex items-center justify-around w-full shrink-0">
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:lock-password-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Secured Payments</div>
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:box-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Automated Tracking</div>
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:banknote-2-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Instant Payouts</div>
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> 24/7 AI Assistant</div>
+                </div>
+                <div class="flex items-center justify-around w-full shrink-0">
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:lock-password-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Secured Payments</div>
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:box-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Automated Tracking</div>
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:banknote-2-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> Instant Payouts</div>
+                    <div class="flex items-center gap-3 text-xl tracking-tight text-neutral-400 font-host"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-2xl text-[#25D366]" stroke-width="1.5"></iconify-icon> 24/7 AI Assistant</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="how-it-works" class="py-32 px-6 relative border-t border-white/5">
+        <div class="max-w-5xl mx-auto">
+            <div class="mb-10 text-center reveal-up">
+                <span class="inline-block py-1.5 px-4 bg-white/5 border border-white/10 text-xs uppercase tracking-[0.25em] text-neutral-300 mb-6">Workflow</span>
+                <h2 class="font-host text-4xl md:text-6xl font-medium tracking-tighter text-white leading-none">
+                    Set up in 60 seconds. <br>Sell forever.
+                </h2>
+            </div>
+            <div class="space-y-10 relative">
+                <!-- Card 1: Setup steps (stacked, gradient + noise) -->
+                <div class="relative md:sticky md:top-28 z-20 reveal-up">
+                    <div class="relative bg-gradient-to-b from-white/15 via-[#25D366]/10 to-transparent p-[1px] border border-white/10">
+                        <div class="absolute inset-0 bg-noise opacity-10 mix-blend-overlay pointer-events-none"></div>
+                        <div class="relative bg-[#050505] p-8 md:p-10 bento-card">
+                            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+                                <div class="max-w-md text-left">
+                                    <h3 class="font-host text-2xl md:text-3xl font-medium tracking-tight text-white mb-3">
+                                        Set up in under a minute
+                                    </h3>
+                                    <p class="text-base text-neutral-400 font-light leading-relaxed">
+                                        Four quick steps. No apps, no documents, no forms longer than a WhatsApp message.
+                                    </p>
+                                </div>
+                                <div class="flex-1 grid grid-cols-2 gap-4">
+                                    <div class="bg-[#0a0a0a] border border-white/10 p-4">
+                                        <div class="text-xs uppercase tracking-[0.25em] text-neutral-500 mb-2">01</div>
+                                        <div class="font-host text-base text-white mb-1">Enter number</div>
+                                        <p class="text-xs text-neutral-500">Drop your WhatsApp number, we prep your store.</p>
+                                    </div>
+                                    <div class="bg-[#0a0a0a] border border-white/10 p-4">
+                                        <div class="text-xs uppercase tracking-[0.25em] text-neutral-500 mb-2">02</div>
+                                        <div class="font-host text-base text-white mb-1">Name your store</div>
+                                        <p class="text-xs text-neutral-500">Tell us your business name. We generate your code.</p>
+                                    </div>
+                                    <div class="bg-[#0a0a0a] border border-white/10 p-4">
+                                        <div class="text-xs uppercase tracking-[0.25em] text-neutral-500 mb-2">03</div>
+                                        <div class="font-host text-base text-white mb-1">Get your link</div>
+                                        <p class="text-xs text-neutral-500">One WhatsApp link you can paste anywhere online.</p>
+                                    </div>
+                                    <div class="bg-[#0a0a0a] border border-white/10 p-4">
+                                        <div class="text-xs uppercase tracking-[0.25em] text-neutral-500 mb-2">04</div>
+                                        <div class="font-host text-base text-white mb-1">Start selling</div>
+                                        <p class="text-xs text-neutral-500">Buyers browse, chat, and pay without leaving WhatsApp.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Card 2: Sell forever (+ tabbed banner), stacked above when scrolling -->
+                <div class="relative md:sticky md:top-40 z-10 reveal-up">
+                    <div class="relative bg-gradient-to-b from-white/15 via-[#25D366]/10 to-transparent p-[1px] border border-white/10">
+                        <div class="absolute inset-0 bg-noise opacity-10 mix-blend-overlay pointer-events-none"></div>
+                        <div class="relative bg-[#050505] p-8 md:p-10 bento-card">
+                            <div class="flex flex-col gap-6">
+                                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                    <div>
+                                        <h3 class="font-host text-2xl md:text-3xl font-medium tracking-tight text-white mb-2">
+                                            Sell forever, even while you sleep
+                                        </h3>
+                                        <p class="text-base text-neutral-400 font-light leading-relaxed max-w-xl">
+                                            MoovMart keeps your WhatsApp store open 24/7 — answering questions, collecting payments, and tracking deliveries.
+                                        </p>
+                                    </div>
+                                </div>
+                                <!-- Animated tabbed component -->
+                                <div class="bg-[#0a0a0a] border border-white/10 p-4 md:p-5 rounded-none">
+                                    <div class="flex flex-wrap gap-2 mb-4">
+                                        <button type="button" class="tab-pill px-4 py-2 rounded-full text-xs uppercase tracking-[0.25em] bg-white text-black" data-tab-target="tab-ai">
+                                            AI assistant
+                                        </button>
+                                        <button type="button" class="tab-pill px-4 py-2 rounded-full text-xs uppercase tracking-[0.25em] bg-transparent text-neutral-300 border border-white/10 hover:bg-white/5" data-tab-target="tab-payments">
+                                            Payments
+                                        </button>
+                                        <button type="button" class="tab-pill px-4 py-2 rounded-full text-xs uppercase tracking-[0.25em] bg-transparent text-neutral-300 border border-white/10 hover:bg-white/5" data-tab-target="tab-logistics">
+                                            Logistics
+                                        </button>
+                                    </div>
+                                    <div class="relative overflow-hidden">
+                                        <div class="tab-panel opacity-100 translate-y-0 transition-all duration-300" data-tab-panel="tab-ai">
+                                            <p class="text-sm text-neutral-300 mb-3">
+                                                MoovMart’s AI greets buyers, recommends products, handles “how much last?” and keeps the conversation moving until payment.
+                                            </p>
+                                            <p class="text-xs text-neutral-500">
+                                                Works in English and Pidgin, so your buyers feel like they’re chatting with a real shop assistant.
+                                            </p>
+                                        </div>
+                                        <div class="tab-panel opacity-0 -translate-y-2 pointer-events-none h-0 overflow-hidden transition-all duration-300" data-tab-panel="tab-payments">
+                                            <p class="text-sm text-neutral-300 mb-3">
+                                                Buyers pay upfront with Paystack-powered links. Their money is held in escrow until delivery is confirmed.
+                                            </p>
+                                            <p class="text-xs text-neutral-500">
+                                                No more “I’ll pay when it arrives” or ghosted buyers. Everyone sees the same, trusted flow.
+                                            </p>
+                                        </div>
+                                        <div class="tab-panel opacity-0 -translate-y-2 pointer-events-none h-0 overflow-hidden transition-all duration-300" data-tab-panel="tab-logistics">
+                                            <p class="text-sm text-neutral-300 mb-3">
+                                                Mark deliveries from WhatsApp, bulk-confirm multiple orders, and get a daily rundown of what shipped.
+                                            </p>
+                                            <p class="text-xs text-neutral-500">
+                                                Your WhatsApp becomes your control room: orders, payouts, and delivery status in one place.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="py-32 px-6 bg-[#0a0a0a] border-t border-white/5 relative">
+        <div class="max-w-7xl mx-auto">
+            <div class="mb-20 reveal-up">
+                <span class="inline-block py-1.5 px-4 bg-[#25D366]/10 border border-[#25D366]/20 text-[#25D366] text-xs uppercase tracking-widest mb-6">Infrastructure</span>
+                <h2 class="font-host text-4xl md:text-6xl font-medium tracking-tighter text-white leading-none">Everything you need.<br>Nothing you don't.</h2>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="md:col-span-2 bg-gradient-to-b from-white/10 to-transparent p-[1px] rounded-none reveal-up">
+                    <div class="bg-[#050505] h-full p-10 md:p-14 flex flex-col md:flex-row items-center gap-12 relative overflow-hidden bento-card">
+                        <div class="absolute -top-40 -right-40 w-96 h-96 bg-[#25D366]/5 blur-[100px] rounded-full pointer-events-none"></div>
+                        <div class="flex-1 relative z-10">
+                            <iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-4xl text-[#25D366] mb-8" stroke-width="1.5"></iconify-icon>
+                            <h3 class="font-host text-3xl font-medium tracking-tight text-white mb-4">AI Buyer Assistant</h3>
+                            <p class="text-base text-neutral-400 font-light leading-relaxed">Your store is always open. MoovMart's AI answers buyer questions, recommends products, handles back-and-forth negotiation, and collects payment — even while you sleep. In English or Pidgin.</p>
+                        </div>
+                        <div class="w-full md:w-80 bg-[#0a0a0a] border border-white/10 p-5 flex flex-col gap-4 relative z-10 shadow-2xl">
+                            <div class="flex items-end gap-3">
+                                <div class="w-8 h-8 bg-[#25D366]/10 border border-[#25D366]/30 flex items-center justify-center shrink-0"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-sm text-[#25D366]"></iconify-icon></div>
+                                <div class="bg-[#111] border border-white/5 p-4 text-sm text-neutral-300">Wetin you dey find today? We get new sneakers in stock.</div>
+                            </div>
+                            <div class="flex items-end gap-3 justify-end"><div class="bg-white text-black p-4 text-sm font-medium">Show me size 42</div></div>
+                            <div class="flex items-end gap-3">
+                                <div class="w-8 h-8 bg-[#25D366]/10 border border-[#25D366]/30 flex items-center justify-center shrink-0"><iconify-icon icon="solar:smart-speaker-minimalistic-linear" class="text-sm text-[#25D366]"></iconify-icon></div>
+                                <div class="bg-[#111] border border-white/5 p-4 text-sm text-neutral-300">I get the black one for ₦25,000. You won pay now?</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gradient-to-b from-white/10 to-transparent p-[1px] reveal-up delay-100">
+                    <div class="bg-[#050505] h-full p-10 relative overflow-hidden bento-card">
+                        <iconify-icon icon="solar:shield-check-linear" class="text-4xl text-[#25D366] mb-8" stroke-width="1.5"></iconify-icon>
+                        <h3 class="font-host text-2xl font-medium tracking-tight text-white mb-4">Secure Payments</h3>
+                        <p class="text-base text-neutral-400 font-light leading-relaxed">Buyers pay before they receive. Their money is held in escrow until you deliver. Paystack-powered.</p>
+                    </div>
+                </div>
+                <div class="bg-gradient-to-b from-white/10 to-transparent p-[1px] reveal-up">
+                    <div class="bg-[#050505] h-full p-10 relative overflow-hidden bento-card">
+                        <iconify-icon icon="solar:wallet-money-linear" class="text-4xl text-[#25D366] mb-8" stroke-width="1.5"></iconify-icon>
+                        <h3 class="font-host text-2xl font-medium tracking-tight text-white mb-4">Automatic Payouts</h3>
+                        <p class="text-base text-neutral-400 font-light leading-relaxed">No manual requests. When your buyer confirms delivery, money is released to your bank instantly.</p>
+                    </div>
+                </div>
+                <div class="bg-gradient-to-b from-white/10 to-transparent p-[1px] reveal-up delay-100">
+                    <div class="bg-[#050505] h-full p-10 relative overflow-hidden flex flex-col justify-between bento-card">
+                        <div>
+                            <iconify-icon icon="solar:layers-minimalistic-linear" class="text-4xl text-[#25D366] mb-8" stroke-width="1.5"></iconify-icon>
+                            <h3 class="font-host text-2xl font-medium tracking-tight text-white mb-4">Dynamic Variants</h3>
+                            <p class="text-base text-neutral-400 font-light leading-relaxed mb-8">Sell shoes in 6 sizes. Phones in 3 storages. Handled conversationally.</p>
+                        </div>
+                        <div class="flex gap-3">
+                            <div class="w-12 h-12 border border-white/10 flex items-center justify-center text-sm text-neutral-400">S</div>
+                            <div class="w-12 h-12 border border-[#25D366] bg-[#25D366]/10 flex items-center justify-center text-sm text-[#25D366]">M</div>
+                            <div class="w-12 h-12 border border-white/10 flex items-center justify-center text-sm text-neutral-400">L</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-gradient-to-b from-white/10 to-transparent p-[1px] reveal-up delay-200">
+                    <div class="bg-[#050505] h-full p-10 relative overflow-hidden bento-card">
+                        <iconify-icon icon="solar:map-point-linear" class="text-4xl text-[#25D366] mb-8" stroke-width="1.5"></iconify-icon>
+                        <h3 class="font-host text-2xl font-medium tracking-tight text-white mb-4">Logistics Sync</h3>
+                        <p class="text-base text-neutral-400 font-light leading-relaxed">Mark deliveries from WhatsApp. Bulk-confirm multiple orders. Get a daily summary at 7am.</p>
+                    </div>
+                </div>
+                <div class="md:col-span-3 bg-gradient-to-r from-[#25D366]/20 to-transparent p-[1px] reveal-up">
+                    <div class="bg-[#050505] h-full p-10 md:p-14 flex flex-col md:flex-row items-center justify-between gap-10 bento-card">
+                        <div class="max-w-2xl">
+                            <iconify-icon icon="solar:verified-check-linear" class="text-4xl text-[#25D366] mb-8" stroke-width="1.5"></iconify-icon>
+                            <h3 class="font-host text-3xl font-medium tracking-tight text-white mb-4">Identity Verification Protocol</h3>
+                            <p class="text-base text-neutral-400 font-light leading-relaxed">Every vendor is BVN-verified before receiving payouts. Buyers know exactly who they're interacting with. Trust is engineered into the platform from day one.</p>
+                        </div>
+                        <div class="w-full md:w-auto flex flex-col gap-4">
+                            <div class="bg-[#0a0a0a] border border-[#25D366]/30 p-5 flex items-center gap-5 pr-14 relative">
+                                <div class="w-12 h-12 bg-neutral-900 border border-white/10"></div>
+                                <div><div class="h-2 w-28 bg-neutral-700 mb-3"></div><div class="h-2 w-16 bg-neutral-800"></div></div>
+                                <iconify-icon icon="solar:verified-check-linear" class="text-2xl text-[#25D366] absolute right-5"></iconify-icon>
+                            </div>
+                            <div class="bg-[#0a0a0a] border border-white/10 p-5 flex items-center gap-5 pr-14 relative opacity-40 grayscale">
+                                <div class="w-12 h-12 bg-neutral-900 border border-white/10"></div>
+                                <div><div class="h-2 w-32 bg-neutral-700 mb-3"></div><div class="h-2 w-20 bg-neutral-800"></div></div>
+                                <iconify-icon icon="solar:verified-check-linear" class="text-2xl text-white absolute right-5"></iconify-icon>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="buyers" class="py-40 bg-[#050505] px-6 border-y border-white/5 relative overflow-hidden">
+        <div class="absolute inset-0 flex items-center justify-center opacity-[0.02] pointer-events-none select-none">
+            <span class="font-host text-[25vw] font-medium tracking-tighter leading-none whitespace-nowrap">SECURE</span>
+        </div>
+        <div class="max-w-4xl mx-auto text-center relative z-10 reveal-up">
+            <span class="inline-block py-1.5 px-4 bg-white/5 border border-white/10 text-xs uppercase tracking-widest text-neutral-300 mb-8">Consumer Protection</span>
+            <h2 class="font-host text-5xl md:text-7xl font-medium tracking-tighter text-white mb-10 leading-[0.95]">Shop verified vendors. <br>Pay safely.</h2>
+            <p class="text-lg md:text-xl text-neutral-400 max-w-2xl mx-auto mb-16 font-light">Every store on MoovMart is verified. Your payment is held securely until your order arrives. No fake vendors. No disappeared sellers.</p>
+            <div class="bg-[#0a0a0a] border border-white/15 p-2 max-w-2xl mx-auto flex items-center shadow-2xl focus-within:border-white/40 transition-colors">
+                <iconify-icon icon="solar:magnifer-linear" class="text-2xl text-neutral-500 ml-4"></iconify-icon>
+                <input type="text" placeholder="Find a store by name or code..." class="w-full bg-transparent py-4 px-5 text-lg text-white placeholder-neutral-600 focus:outline-none" readonly>
+                <button class="bg-white text-black py-4 px-8 text-sm font-medium tracking-wide uppercase hover:bg-neutral-200 transition-colors">Search</button>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-32 px-6 bg-dots relative">
+        <div class="max-w-4xl mx-auto">
+            <h2 class="font-host text-4xl md:text-6xl font-medium tracking-tighter text-white text-center mb-16 reveal-up">
+                Why vendors choose MoovMart
+            </h2>
+            <div class="space-y-12">
+                <div class="bg-[#050505] border border-white/10 p-10 bento-card reveal-up">
+                    <div class="flex items-start gap-6">
+                        <iconify-icon icon="solar:chat-square-call-linear" class="text-5xl text-[#25D366] shrink-0" stroke-width="1.5"></iconify-icon>
+                        <div>
+                            <p class="font-host text-3xl tracking-tight text-white mb-8 font-medium leading-tight">
+                                "I set up in 5 minutes and made my first sale the same day. My buyers stopped ghosting me once payment was collected upfront."
+                            </p>
+                            <div class="flex items-center gap-4 text-sm text-neutral-400">
+                                <div class="w-10 h-10 bg-[#111] border border-white/10 flex items-center justify-center text-base font-host text-neutral-400">A</div>
+                                <div>
+                                    <div class="text-white font-medium uppercase tracking-wide">Aisha Boutique</div>
+                                    <div class="text-neutral-500">Fashion Vendor</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex flex-col md:flex-row gap-6 reveal-up">
+                    <div class="flex-1 bg-[#050505] border border-white/10 p-10 text-center bento-card">
+                        <div class="font-host text-6xl font-medium tracking-tighter text-[#25D366] mb-3">5m</div>
+                        <div class="text-sm uppercase tracking-widest text-neutral-400">Average setup time</div>
+                    </div>
+                    <div class="flex-1 bg-[#050505] border border-white/10 p-10 text-center bento-card">
+                        <div class="font-host text-6xl font-medium tracking-tighter text-[#25D366] mb-3">24h</div>
+                        <div class="text-sm uppercase tracking-widest text-neutral-400">Average payout time</div>
+                    </div>
+                </div>
+                <div class="bg-[#050505] border border-white/10 p-10 bento-card reveal-up">
+                    <div class="flex flex-col md:flex-row items-start md:items-center gap-8">
+                        <iconify-icon icon="solar:smartphone-linear" class="text-5xl text-neutral-600 shrink-0"></iconify-icon>
+                        <div>
+                            <p class="font-host text-2xl tracking-tight text-white leading-snug mb-4">
+                                "I used to manage orders in my head. Now I just check my WhatsApp."
+                            </p>
+                            <p class="text-sm text-neutral-500 uppercase tracking-wide">Lagos electronics vendor</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="pricing" class="py-32 bg-[#0a0a0a] px-6 border-y border-white/5 relative">
+        <div class="max-w-4xl mx-auto">
+            <div class="text-center mb-16 reveal-up">
+                <h2 class="font-host text-5xl md:text-7xl font-medium tracking-tighter text-white mb-8 leading-[0.95]">
+                    Free to start.<br>We only earn when you do.
+                </h2>
+                <p class="text-lg md:text-xl text-neutral-400 font-light max-w-2xl mx-auto">
+                    No monthly fees. No setup cost. No hidden charges. MoovMart only takes a small commission on completed sales.
+                </p>
+            </div>
+            <div class="reveal-up">
+                <div class="space-y-4 text-left md:text-center">
+                    <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2 border-b border-white/10 pb-4">
+                        <span class="text-sm uppercase tracking-[0.2em] text-neutral-500">Electronics</span>
+                        <span class="font-host text-4xl font-medium tracking-tighter text-[#25D366]">3%</span>
+                    </div>
+                    <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2 border-b border-white/10 pb-4">
+                        <span class="text-sm uppercase tracking-[0.2em] text-neutral-500">Food</span>
+                        <span class="font-host text-4xl font-medium tracking-tighter text-[#25D366]">4%</span>
+                    </div>
+                    <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2 border-b border-white/10 pb-4">
+                        <span class="text-sm uppercase tracking-[0.2em] text-neutral-500">Everything else</span>
+                        <span class="font-host text-4xl font-medium tracking-tighter text-[#25D366]">5%</span>
+                    </div>
+                    <div class="flex flex-col md:flex-row md:items-baseline md:justify-between gap-2">
+                        <span class="text-sm uppercase tracking-[0.2em] text-neutral-500">Fashion &amp; Beauty</span>
+                        <span class="font-host text-4xl font-medium tracking-tighter text-[#25D366]">6%</span>
+                    </div>
+                </div>
+                <div class="mt-12 text-center">
+                    <p class="text-base text-neutral-400 font-light">
+                        The more you sell, the less you pay. High-volume vendors unlock reduced rates automatically.
+                    </p>
+                    <p class="text-lg text-white font-medium mt-4 tracking-wide uppercase">
+                        If you don't sell, you pay nothing.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-32 px-6 bg-[#050505]">
+        <div class="max-w-3xl mx-auto">
+            <h2 class="font-host text-4xl md:text-6xl font-medium tracking-tighter text-white text-center mb-20 reveal-up">F.A.Q.</h2>
+            <div class="space-y-4 reveal-up delay-100">
+                <details class="group bg-[#0a0a0a] border border-white/10 overflow-hidden transition-all duration-300">
+                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-8 text-xl tracking-tight text-white">
+                        <span>Do buyers need to download anything?</span>
+                        <span class="transition-transform duration-300 group-open:rotate-45 shrink-0 ml-4"><iconify-icon icon="solar:add-circle-linear" class="text-2xl text-neutral-500 group-open:text-[#25D366]" stroke-width="1.5"></iconify-icon></span>
+                    </summary>
+                    <div class="p-8 pt-0 text-base text-neutral-400 font-light leading-relaxed border-t border-white/5 mt-2">No. Everything happens in WhatsApp which they already have installed.</div>
+                </details>
+                <details class="group bg-[#0a0a0a] border border-white/10 overflow-hidden transition-all duration-300">
+                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-8 text-xl tracking-tight text-white">
+                        <span>Do I need a website or social media?</span>
+                        <span class="transition-transform duration-300 group-open:rotate-45 shrink-0 ml-4"><iconify-icon icon="solar:add-circle-linear" class="text-2xl text-neutral-500 group-open:text-[#25D366]" stroke-width="1.5"></iconify-icon></span>
+                    </summary>
+                    <div class="p-8 pt-0 text-base text-neutral-400 font-light leading-relaxed border-t border-white/5 mt-2">No. Your store link is all you need. Share it anywhere.</div>
+                </details>
+                <details class="group bg-[#0a0a0a] border border-white/10 overflow-hidden transition-all duration-300">
+                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-8 text-xl tracking-tight text-white">
+                        <span>What if a buyer doesn't confirm delivery?</span>
+                        <span class="transition-transform duration-300 group-open:rotate-45 shrink-0 ml-4"><iconify-icon icon="solar:add-circle-linear" class="text-2xl text-neutral-500 group-open:text-[#25D366]" stroke-width="1.5"></iconify-icon></span>
+                    </summary>
+                    <div class="p-8 pt-0 text-base text-neutral-400 font-light leading-relaxed border-t border-white/5 mt-2">After 48 hours with no dispute, your payment releases automatically to your bank.</div>
+                </details>
+                <details class="group bg-[#0a0a0a] border border-white/10 overflow-hidden transition-all duration-300">
+                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-8 text-xl tracking-tight text-white">
+                        <span>Can I sell products with sizes and colours?</span>
+                        <span class="transition-transform duration-300 group-open:rotate-45 shrink-0 ml-4"><iconify-icon icon="solar:add-circle-linear" class="text-2xl text-neutral-500 group-open:text-[#25D366]" stroke-width="1.5"></iconify-icon></span>
+                    </summary>
+                    <div class="p-8 pt-0 text-base text-neutral-400 font-light leading-relaxed border-t border-white/5 mt-2">Yes. MoovMart handles variants — sizes, colours, storage options, portions. Buyers pick their combination conversationally.</div>
+                </details>
+                <details class="group bg-[#0a0a0a] border border-white/10 overflow-hidden transition-all duration-300">
+                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-8 text-xl tracking-tight text-white">
+                        <span>Is my money safe?</span>
+                        <span class="transition-transform duration-300 group-open:rotate-45 shrink-0 ml-4"><iconify-icon icon="solar:add-circle-linear" class="text-2xl text-neutral-500 group-open:text-[#25D366]" stroke-width="1.5"></iconify-icon></span>
+                    </summary>
+                    <div class="p-8 pt-0 text-base text-neutral-400 font-light leading-relaxed border-t border-white/5 mt-2">Payments are processed by industry standards and held in escrow until delivery is confirmed. Your money is protected.</div>
+                </details>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-40 px-6 relative overflow-hidden bg-dots border-t border-white/10">
+        <div class="absolute bottom-0 left-1/2 -translate-x-1/2 w-full max-w-3xl h-[400px] bg-[#25D366]/15 blur-[150px] rounded-t-full pointer-events-none"></div>
+        <div class="max-w-4xl mx-auto text-center relative z-10 reveal-up">
+            <h2 class="font-host text-6xl md:text-8xl font-medium tracking-tighter text-white mb-8 leading-[0.95]">Your store is <br>one link away.</h2>
+            <p class="text-xl md:text-2xl text-neutral-400 font-light mb-14">Enter your number. Get your link. Start selling today.</p>
+            <a href="#get-started" class="group inline-flex items-center gap-3 bg-white text-black font-medium py-4 px-8 text-base tracking-wide hover:bg-[#25D366] transition-colors transform hover:-translate-y-0.5 active:translate-y-0 active:scale-95">
+                Get started <iconify-icon icon="solar:arrow-right-linear" class="text-xl transition-transform duration-200 group-hover:translate-x-1 group-hover:-translate-y-0.5" stroke-width="1.5"></iconify-icon>
+            </a>
+            <p class="text-xs uppercase tracking-widest text-neutral-500 mt-6">Free forever until you make a sale.</p>
+        </div>
+    </section>
+
+    <footer class="border-t border-white/10 bg-[#050505] pt-20 pb-10 px-6">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-10 reveal-up">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 bg-white flex items-center justify-center"><iconify-icon icon="solar:bag-3-linear" class="text-xl text-black" stroke-width="1.5"></iconify-icon></div>
+                <span class="font-host text-2xl font-medium tracking-tighter text-white uppercase">MoovMart</span>
+            </div>
+            <div class="flex flex-wrap items-center justify-center gap-10 text-xs uppercase tracking-widest text-neutral-500">
+                <a href="#" class="hover:text-white transition-colors">Terms</a>
+                <a href="/privacy" class="hover:text-white transition-colors">Privacy</a>
+                <a href="#" class="hover:text-white transition-colors">Support</a>
+            </div>
+            <div class="flex items-center gap-6 text-neutral-500">
+                <a href="#" class="hover:text-white transition-colors"><iconify-icon icon="solar:hashtag-linear" class="text-2xl" stroke-width="1.5"></iconify-icon></a>
+                <a href="#" class="hover:text-white transition-colors"><iconify-icon icon="solar:camera-linear" class="text-2xl" stroke-width="1.5"></iconify-icon></a>
+            </div>
+        </div>
+        <div class="max-w-7xl mx-auto mt-16 text-center text-xs uppercase tracking-widest text-neutral-700 reveal-up delay-100">© 2024 MoovMart. All rights reserved.</div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.0.42/dist/lenis.min.js"></script>
+    <script>
+        (function () {
+            var step1 = document.getElementById('step-1');
+            var step2 = document.getElementById('step-2');
+            var step3 = document.getElementById('step-3');
+            var formNumber = document.getElementById('form-number');
+            var formStorename = document.getElementById('form-storename');
+            var inputPhone = document.getElementById('input-phone');
+            var inputStorename = document.getElementById('input-storename');
+            var displayCode = document.getElementById('display-storecode');
+            var btnSetup = document.getElementById('btn-setup');
+            var btnWhatsapp = document.getElementById('btn-whatsapp');
+            var backToStep1 = document.getElementById('back-to-step1');
+            var startOver = document.getElementById('start-over');
+
+            function showStep(step) {
+                step1.classList.remove('active'); step2.classList.remove('active'); step3.classList.remove('active');
+                if (step === 1) step1.classList.add('active');
+                else if (step === 2) step2.classList.add('active');
+                else if (step === 3) step3.classList.add('active');
+            }
+
+            formNumber.addEventListener('submit', function (e) {
+                e.preventDefault();
+                if (!inputPhone.value.trim()) return;
+                showStep(2);
+                inputStorename.focus();
+            });
+
+            formStorename.addEventListener('submit', function (e) {
+                e.preventDefault();
+                var phone = (inputPhone.value || '').replace(/\D/g, '');
+                var name = inputStorename.value.trim();
+                if (!name) return;
+                if (!phone || phone.length < 10) { showStep(1); return; }
+                var btn = formStorename.querySelector('button[type="submit"]');
+                btn.disabled = true;
+                btn.textContent = 'Creating…';
+                fetch('/api/landing/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ whatsapp_number: phone.length > 10 ? phone : '234' + phone, business_name: name })
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (data.error) { alert(data.error); btn.disabled = false; btn.textContent = 'Continue'; return; }
+                        displayCode.textContent = data.store_code || '—';
+                        btnSetup.href = data.setup_link || '#';
+                        btnWhatsapp.href = data.whatsapp_link || '#';
+                        showStep(3);
+                    })
+                    .catch(function () { alert('Something went wrong. Try again.'); })
+                    .finally(function () { btn.disabled = false; btn.textContent = 'Continue \u2192'; });
+            });
+
+            backToStep1.addEventListener('click', function () { showStep(1); });
+            startOver.addEventListener('click', function () { showStep(1); inputPhone.value = ''; inputStorename.value = ''; });
+
+            var observerOptions = { root: null, rootMargin: '0px', threshold: 0.1 };
+            var observer = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (entry.isIntersecting) { entry.target.classList.add('is-visible'); observer.unobserve(entry.target); }
+                });
+            }, observerOptions);
+            document.querySelectorAll('.reveal-up').forEach(function (el) { observer.observe(el); });
+
+            // Tabs: Sell forever card
+            var tabButtons = document.querySelectorAll('.tab-pill');
+            var tabPanels = document.querySelectorAll('.tab-panel');
+            function activateTab(target) {
+                tabButtons.forEach(function (btn) {
+                    var isActive = btn.getAttribute('data-tab-target') === target;
+                    if (isActive) {
+                        btn.classList.add('bg-white', 'text-black');
+                        btn.classList.remove('bg-transparent', 'text-neutral-300');
+                    } else {
+                        btn.classList.remove('bg-white', 'text-black');
+                        btn.classList.add('bg-transparent', 'text-neutral-300');
+                    }
+                });
+                tabPanels.forEach(function (panel) {
+                    var match = panel.getAttribute('data-tab-panel') === target;
+                    if (match) {
+                        panel.classList.remove('opacity-0', '-translate-y-2', 'pointer-events-none', 'h-0', 'overflow-hidden');
+                        panel.classList.add('opacity-100', 'translate-y-0');
+                    } else {
+                        panel.classList.add('opacity-0', '-translate-y-2', 'pointer-events-none', 'h-0', 'overflow-hidden');
+                        panel.classList.remove('opacity-100', 'translate-y-0');
+                    }
+                });
+            }
+            tabButtons.forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var target = btn.getAttribute('data-tab-target');
+                    activateTab(target);
+                });
+            });
+            // Ensure initial state
+            activateTab('tab-ai');
+
+            // Lenis smooth scroll (page-level)
+            if (window.Lenis) {
+                var lenis = new Lenis({
+                    lerp: 0.1,
+                    smoothWheel: true,
+                    smoothTouch: false
+                });
+                function raf(time) {
+                    lenis.raf(time);
+                    requestAnimationFrame(raf);
+                }
+                requestAnimationFrame(raf);
+            }
+
+            // Hero rotating text with vertical cut reveal
+            var heroTitle = document.getElementById('hero-title');
+            var heroSubtitle = document.getElementById('hero-subtitle');
+            if (heroTitle && heroSubtitle) {
+                heroTitle.classList.add('hero-anim');
+                heroSubtitle.classList.add('hero-anim');
+
+                var heroVariants = [
+                    {
+                        title: 'Turn your WhatsApp<br>into a store.',
+                        sub: 'Drop your number. Get a store link. Buyers pay before delivery — all inside WhatsApp.'
+                    },
+                    {
+                        title: 'No more “I’ll pay<br>when it arrives”.',
+                        sub: 'MoovMart holds buyer money in escrow until you deliver. Serious buyers only, fewer ghosts.'
+                    },
+                    {
+                        title: 'Your stall is open<br>24 hours a day.',
+                        sub: 'AI answers “how much?”, checks sizes, and collects payment — even at midnight.'
+                    },
+                    {
+                        title: 'One link for every<br>thing you sell.',
+                        sub: 'Fashion, food, phones — one WhatsApp storefront for all your products and buyers.'
+                    }
+                ];
+                var heroIdx = 0;
+
+                function setHero(index) {
+                    var v = heroVariants[index];
+                    if (!v) return;
+                    heroTitle.innerHTML = v.title;
+                    heroSubtitle.textContent = v.sub;
+                }
+
+                function cycleHero() {
+                    heroTitle.style.opacity = '0';
+                    heroSubtitle.style.opacity = '0';
+                    heroTitle.style.transform = 'translateY(-12px)';
+                    heroSubtitle.style.transform = 'translateY(-12px)';
+                    setTimeout(function () {
+                        heroIdx = (heroIdx + 1) % heroVariants.length;
+                        setHero(heroIdx);
+                        heroTitle.style.transform = 'translateY(12px)';
+                        heroSubtitle.style.transform = 'translateY(12px)';
+                        requestAnimationFrame(function () {
+                            heroTitle.style.opacity = '1';
+                            heroSubtitle.style.opacity = '1';
+                            heroTitle.style.transform = 'translateY(0)';
+                            heroSubtitle.style.transform = 'translateY(0)';
+                        });
+                    }, 400); // slightly longer delay for a smoother cut
+                }
+
+                // Ensure starting from first variant, then begin cycling
+                setHero(heroIdx);
+                // First change after a short pause so it feels intentional
+                setTimeout(cycleHero, 4000);
+                setInterval(cycleHero, 9000);
+            }
+
+        })();
+    </script>
+</body>
+</html>

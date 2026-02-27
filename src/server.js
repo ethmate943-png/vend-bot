@@ -17,6 +17,9 @@ const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
+const publicDir = path.join(process.cwd(), 'public');
+if (fs.existsSync(publicDir)) app.use(express.static(publicDir));
+
 app.use('/webhook/paystack', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
@@ -96,6 +99,215 @@ app.get('/qr', async (req, res) => {
     .card{background:#128C7E;padding:2rem;border-radius:1rem;max-width:380px}</style></head>
     <body><div class="card"><h2>⏳ Connecting…</h2><p>Refresh in a moment to see the QR code.</p></div></body></html>
   `);
+});
+
+// Normalize a raw code string into a store_code (A–Z, 0–9, hyphen, max 12 chars).
+function normalizeStoreCode(raw) {
+  if (!raw) return 'STORE';
+  const cleaned = String(raw)
+    .trim()
+    .replace(/[^A-Za-z0-9-]/g, '')
+    .toUpperCase()
+    .slice(0, 12);
+  return cleaned || 'STORE';
+}
+
+// Build candidate store codes from the business name:
+// - 1st word
+// - 1st + 2nd word joined with hyphen
+// - 1st + 2nd + 3rd word joined with hyphen
+function buildStoreCodeCandidates(businessName) {
+  if (!businessName || !String(businessName).trim()) return ['STORE'];
+  const words = String(businessName)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const candidates = [];
+  if (words[0]) candidates.push(normalizeStoreCode(words[0]));
+  if (words.length >= 2) candidates.push(normalizeStoreCode(`${words[0]}-${words[1]}`));
+  if (words.length >= 3) candidates.push(
+    normalizeStoreCode(`${words[0]}-${words[1]}-${words[2]}`)
+  );
+  const uniq = [];
+  for (const c of candidates) {
+    if (!uniq.includes(c)) uniq.push(c);
+  }
+  return uniq.length ? uniq : ['STORE'];
+}
+
+async function findAvailableStoreCode(candidates, excludeVendorId) {
+  let list = candidates && candidates.length ? candidates : ['STORE'];
+  // Try each candidate as-is
+  for (const cand of list) {
+    const args = [cand];
+    let sql =
+      'SELECT id FROM vendors WHERE UPPER(TRIM(store_code)) = $1';
+    if (excludeVendorId) {
+      sql += ' AND id != $2';
+      args.push(excludeVendorId);
+    }
+    sql += ' LIMIT 1';
+    const clash = await query(sql, args);
+    if (!(clash.rows && clash.rows.length)) {
+      return cand;
+    }
+  }
+  // If all taken, append numeric suffix to the last candidate until we find a free one
+  const base = list[list.length - 1] || 'STORE';
+  let suffix = 1;
+  // Hard cap to avoid pathological loops
+  while (suffix < 1000) {
+    const cand = normalizeStoreCode(`${base}-${suffix}`);
+    const args = [cand];
+    let sql =
+      'SELECT id FROM vendors WHERE UPPER(TRIM(store_code)) = $1';
+    if (excludeVendorId) {
+      sql += ' AND id != $2';
+      args.push(excludeVendorId);
+    }
+    sql += ' LIMIT 1';
+    const clash = await query(sql, args);
+    if (!(clash.rows && clash.rows.length)) {
+      return cand;
+    }
+    suffix += 1;
+  }
+  return normalizeStoreCode(base);
+}
+
+// Landing registration: create/update vendor by number + business name, return store code and links.
+app.post('/api/landing/register', async (req, res) => {
+  try {
+    const { whatsapp_number, business_name } = req.body || {};
+    const raw = String(whatsapp_number || '').replace(/\D/g, '');
+    const phone = raw.startsWith('234') ? raw : raw ? `234${raw}` : '';
+    const name = String(business_name || '').trim().slice(0, 200);
+    if (!phone || phone.length < 10) {
+      return res.status(400).json({ error: 'Valid WhatsApp number required' });
+    }
+    if (!name) {
+      return res.status(400).json({ error: 'Business / store name required' });
+    }
+    const candidates = buildStoreCodeCandidates(name);
+    // Prefer the most specific candidate (e.g. FIRST-SECOND-THIRD)
+    const desiredCode = candidates[candidates.length - 1] || candidates[0] || 'STORE';
+    let storeCode = desiredCode;
+    const bot = (process.env.BOT_NUMBER || process.env.VENDBOT_NUMBER || '').replace(/\D/g, '');
+    const waBase = bot || phone;
+    // Check for store_code collision with a different vendor
+    const clashRes = await query(
+      'SELECT id FROM vendors WHERE UPPER(TRIM(store_code)) = $1 LIMIT 1',
+      [storeCode]
+    );
+
+    const existing = await query(
+      'SELECT id, store_code FROM vendors WHERE whatsapp_number = $1 LIMIT 1',
+      [phone]
+    );
+    const row = existing.rows && existing.rows[0];
+
+    if (clashRes.rows && clashRes.rows.length) {
+      const clashId = clashRes.rows[0].id;
+      const sameVendor = row && row.id === clashId;
+      if (!sameVendor) {
+        return res.status(409).json({
+          error: 'That store code is already taken. Try a slightly different business name.'
+        });
+      }
+    }
+
+    if (row) {
+      await query(
+        'UPDATE vendors SET business_name = $1, store_code = $2 WHERE id = $3',
+        [name, storeCode, row.id]
+      );
+    } else {
+      await query(
+        `INSERT INTO vendors (whatsapp_number, business_name, store_code, status) VALUES ($1, $2, $3, 'probation')`,
+        [phone, name, storeCode]
+      );
+    }
+    const text = encodeURIComponent(storeCode);
+    res.json({
+      store_code: storeCode,
+      whatsapp_link: `https://wa.me/${waBase}?text=${text}`,
+      setup_link: `https://wa.me/${waBase}?text=${encodeURIComponent(storeCode + ' setup')}`
+    });
+  } catch (err) {
+    console.error('[SERVER] /api/landing/register error:', err.message);
+    res.status(500).json({ error: 'Registration failed. Try again.' });
+  }
+});
+
+// MoovMart landing page (root and /landing).
+app.get(['/', '/landing'], (req, res) => {
+  const landingPath = path.join(process.cwd(), 'public', 'landing.html');
+  if (fs.existsSync(landingPath)) return res.sendFile(landingPath);
+  res.redirect(302, '/health');
+});
+
+// Privacy policy page.
+app.get('/privacy', (req, res) => {
+  const privacyPath = path.join(process.cwd(), 'public', 'privacy.html');
+  if (fs.existsSync(privacyPath)) return res.sendFile(privacyPath);
+  res.status(404).send('Privacy policy not found');
+});
+
+// Simple front-facing page listing all seeded vendors + their WhatsApp links.
+app.get('/vendors/links', async (req, res) => {
+  try {
+    const bot = (process.env.BOT_NUMBER || process.env.VENDBOT_NUMBER || '').replace(/\D/g, '');
+    const { rows } = await query(
+      `SELECT business_name, store_code, whatsapp_number
+       FROM vendors
+       WHERE store_code IS NOT NULL AND store_code != ''
+       ORDER BY business_name NULLS LAST`
+    );
+    const links = rows.map(v => {
+      const base = bot || (v.whatsapp_number || '').replace(/\D/g, '');
+      const code = encodeURIComponent(v.store_code || '');
+      return {
+        name: v.business_name || v.store_code,
+        store_code: v.store_code,
+        url: `https://wa.me/${base}?text=${code}`
+      };
+    });
+
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>VendBot Demo Stores</title>
+        <style>
+          body{font-family:system-ui;background:#111827;color:#e5e7eb;margin:0;padding:2rem;}
+          h1{font-size:1.5rem;margin-bottom:1rem;}
+          .vendor{background:#1f2937;margin-bottom:.75rem;padding:.75rem 1rem;border-radius:.5rem;display:flex;justify-content:space-between;align-items:center;}
+          .name{font-weight:600;}
+          a{color:#10b981;text-decoration:none;font-size:.9rem;}
+          a:hover{text-decoration:underline;}
+          code{background:#111827;color:#9ca3af;padding:2px 4px;border-radius:4px;}
+        </style>
+      </head>
+      <body>
+        <h1>VendBot demo vendors</h1>
+        ${links.length === 0 ? '<p>No vendors with store codes found.</p>' : links.map(v => `
+          <div class="vendor">
+            <div>
+              <div class="name">${v.name}</div>
+              <div>Store code: <code>${v.store_code}</code></div>
+            </div>
+            <div><a href="${v.url}" target="_blank" rel="noopener noreferrer">Open WhatsApp link</a></div>
+          </div>
+        `).join('')}
+      </body>
+      </html>
+    `);
+  } catch (err) {
+    console.error('[SERVER] /vendors/links error:', err.message);
+    res.status(500).send('Error loading vendor links.');
+  }
 });
 
 // Proxy payment link: /pay/:token binds the link to one transaction (buyer/vendor/order).
