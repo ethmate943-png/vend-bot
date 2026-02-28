@@ -574,6 +574,35 @@
             var backFromAlready = document.getElementById('back-from-already');
             var startOver = document.getElementById('start-over');
 
+            function normalizePhoneForApi(raw) {
+                var cleaned = String(raw || '').replace(/\D/g, '');
+                if (!cleaned) return '';
+                if (cleaned.startsWith('0')) cleaned = '234' + cleaned.slice(1);
+                if (!cleaned.startsWith('234') && cleaned.length <= 11) cleaned = '234' + cleaned;
+                return cleaned;
+            }
+
+            function openWhatsAppWithToken(event, phone, name, fallbackHref) {
+                if (!phone) return false;
+                var normalized = normalizePhoneForApi(phone);
+                if (!normalized) return false;
+                if (event && event.preventDefault) event.preventDefault();
+                fetch('/api/onboarding/init', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone: normalized, name: name || null })
+                })
+                    .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('bad status')); })
+                    .then(function (data) {
+                        var link = data && data.whatsapp_link ? data.whatsapp_link : fallbackHref;
+                        if (link && link !== '#') window.open(link, '_blank');
+                    })
+                    .catch(function () {
+                        if (fallbackHref && fallbackHref !== '#') window.open(fallbackHref, '_blank');
+                    });
+                return false;
+            }
+
             function showStep(step) {
                 step1.classList.remove('active'); step2.classList.remove('active'); step2Already.classList.remove('active'); step3.classList.remove('active');
                 if (step === 1) step1.classList.add('active');
@@ -615,6 +644,8 @@
                             }
                             var btnSetup = document.getElementById('btn-continue-setup');
                             btnSetup.href = data.setup_link || '#';
+                            btnSetup.setAttribute('data-phone', phone.length > 10 ? phone : '234' + phone);
+                            btnSetup.setAttribute('data-name', data.business_name || '');
                             btnSetup.textContent = complete ? 'Open in WhatsApp' : 'Continue setup in WhatsApp';
                             document.getElementById('btn-open-store').href = data.whatsapp_link || '#';
                             showStep('2-already');
@@ -648,6 +679,8 @@
                         if (data.error) { alert(data.error); btn.disabled = false; btn.textContent = 'Continue'; return; }
                         displayCode.textContent = data.store_code || '—';
                         btnSetup.href = data.setup_link || '#';
+                        btnSetup.setAttribute('data-phone', phone.length > 10 ? phone : '234' + phone);
+                        btnSetup.setAttribute('data-name', name);
                         btnWhatsapp.href = data.whatsapp_link || '#';
                         showStep(3);
                     })
@@ -657,6 +690,20 @@
 
             backToStep1.addEventListener('click', function () { showStep(1); });
             startOver.addEventListener('click', function () { showStep(1); inputPhone.value = ''; inputStorename.value = ''; });
+
+            // Intercept setup buttons to embed MOOV-[TOKEN] message via backend.
+            document.getElementById('btn-continue-setup').addEventListener('click', function (e) {
+                var phone = this.getAttribute('data-phone') || (inputPhone.value || '').replace(/\D/g, '');
+                var name = this.getAttribute('data-name') || '';
+                var fallback = this.href || '#';
+                openWhatsAppWithToken(e, phone, name, fallback);
+            });
+            btnSetup.addEventListener('click', function (e) {
+                var phone = this.getAttribute('data-phone') || (inputPhone.value || '').replace(/\D/g, '');
+                var name = this.getAttribute('data-name') || inputStorename.value.trim();
+                var fallback = this.href || '#';
+                openWhatsAppWithToken(e, phone, name, fallback);
+            });
 
             var observerOptions = { root: null, rootMargin: '0px', threshold: 0.1 };
             var observer = new IntersectionObserver(function (entries) {

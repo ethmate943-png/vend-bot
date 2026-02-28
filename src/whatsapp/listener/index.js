@@ -2,6 +2,7 @@
 
 const { getSession, getChatHistory, appendMessage, clearSession, getConversationHistory, appendConversationExchange, setSessionRole, appendHistory, upsertSession, getAnyActiveBuyerSession } = require('../../sessions/manager');
 const { getVendorByBotNumber, getVendorByStoreCode, getVendorById } = require('../../vendors/resolver');
+const { handleLandingPageEntry } = require('../../vendors/onboarding');
 const { resolveIdentity, setOnboardingSession } = require('../../identity/resolver');
 const { getBuyerDisplayNameFromMessage, extractNameFromMessage, buildGreeting } = require('../../identity/buyer');
 const { getInventory } = require('../../inventory/manager');
@@ -155,6 +156,14 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
   const adminPhone = (process.env.ADMIN_WHATSAPP || '').replace(/\D/g, '');
   if (adminPhone && buyerJid === adminPhone + '@s.whatsapp.net' && (text || '').trim()) {
     await handleAdminCommand(sock, (text || '').trim(), buyerJid);
+    return;
+  }
+
+  // Landing-page onboarding token: MOOV-[TOKEN] has highest priority.
+  const trimmedTextForToken = (text || '').trim();
+  const upperForToken = trimmedTextForToken.toUpperCase();
+  if (upperForToken.startsWith('MOOV-')) {
+    await handleLandingPageEntry(sock, buyerJid, trimmedTextForToken);
     return;
   }
 

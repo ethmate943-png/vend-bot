@@ -8,6 +8,7 @@ const { getReceiptData } = require('./payments/receipt-data');
 const { getState } = require('./whatsapp/qr-store');
 const { query } = require('./db');
 const { runSystemChecks } = require('./health/system-checks');
+const { initOnboarding } = require('./api/onboarding');
 
 const path = require('path');
 const fs = require('fs');
@@ -46,6 +47,9 @@ app.get('/health/systems', async (_, res) => {
     });
   }
 });
+
+// Landing-page → WhatsApp vendor onboarding token.
+app.post('/api/onboarding/init', initOnboarding);
 
 // QR page so phone users can scan WhatsApp without using the terminal
 app.get('/qr', async (req, res) => {

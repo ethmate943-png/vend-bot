@@ -2,8 +2,46 @@ const { query } = require('../db');
 const { sendWithDelay } = require('../whatsapp/sender');
 const { resolveBankCode, verifyAccount, createSubaccount } = require('../payments/subaccount');
 const { useSheets } = require('../inventory/manager');
+const { getVendorById } = require('./resolver');
 
 const VENDBOT_NUMBER = process.env.VENDBOT_NUMBER || '';
+
+function canonicalBuyerJid(jid) {
+  if (!jid || typeof jid !== 'string') return jid;
+  const phone = jid
+    .replace(/@s\.whatsapp\.net$/i, '')
+    .replace(/@lid.*$/i, '')
+    .replace(/\D/g, '');
+  return phone ? `${phone}@s.whatsapp.net` : jid;
+}
+
+async function clearBuyerSessions(senderJid) {
+  const c = canonicalBuyerJid(senderJid);
+  await query(
+    `UPDATE sessions SET
+       intent_state = 'idle',
+       conversation_history = '[]'::jsonb,
+       last_item_name = null,
+       last_item_sku = null,
+       last_item_price = null,
+       updated_at = NOW()
+     WHERE buyer_jid = $1`,
+    [c]
+  );
+  console.log(`[ONBOARDING] Cleared buyer sessions for ${c}`);
+}
+
+async function updateVendorState(vendorId, state, data) {
+  if (!vendorId) return;
+  await query(
+    `UPDATE vendors SET
+       vendor_state = $1,
+       vendor_state_data = $2,
+       updated_at = NOW()
+     WHERE id = $3`,
+    [state || null, data ? JSON.stringify(data) : null, vendorId]
+  );
+}
 
 /** Full list of vendor commands — shown when they finish onboarding and when they type HELP or COMMANDS. */
 function getVendorCommandsMessage(vendor) {
@@ -354,4 +392,260 @@ async function handleOnboarding(sock, jid, text, vendor) {
   return false;
 }
 
-module.exports = { handleOnboarding, getVendorCommandsMessage };
+async function handleLandingPageEntry(sock, senderJid, text) {
+  const c = canonicalBuyerJid(senderJid);
+  const raw = (text || '').trim();
+  const token = raw.replace(/^MOOV-/i, '').trim().split(/\s+/)[0] || '';
+
+  if (!token) {
+    await sendWithDelay(sock, c,
+      `Hi! To set up your store, please reply *VENDOR-SETUP* from this WhatsApp number.`
+    );
+    return;
+  }
+
+  console.log(`[ONBOARDING] Landing page entry — token: ${token}`);
+
+  const res = await query(
+    `SELECT * FROM onboarding_tokens
+     WHERE token = $1
+       AND created_at > NOW() - INTERVAL '24 hours'
+     LIMIT 1`,
+    [token]
+  );
+  const record = res.rows && res.rows[0];
+
+  if (!record) {
+    console.warn(`[ONBOARDING] Token not found or expired: ${token} — falling back`);
+    await sendWithDelay(sock, c,
+      `This link has expired.\n\nReply *VENDOR-SETUP* here to start setting up your store on VendBot.`
+    );
+    return;
+  }
+
+  await query(
+    `UPDATE onboarding_tokens
+       SET status = 'used', used_at = NOW()
+     WHERE token = $1`,
+    [token]
+  );
+
+  const type = String(token).charAt(0) || 'N';
+
+  if (type === 'C' && record.vendor_id) {
+    await handleAlreadyOnboarded(sock, c, record);
+    return;
+  }
+
+  if (type === 'R' && record.vendor_id) {
+    await handleResumeOnboarding(sock, c, record);
+    return;
+  }
+
+  await handleFreshOnboarding(sock, c, record);
+}
+
+async function handleAlreadyOnboarded(sock, senderJid, record) {
+  const vendor = await getVendorById(record.vendor_id);
+  if (!vendor) {
+    await sendWithDelay(sock, senderJid,
+      `Hi! Your store is already live.\n\nReply *VENDOR-SETUP* to manage your store settings or *HELP* to see vendor commands.`
+    );
+    return;
+  }
+
+  await clearBuyerSessions(senderJid);
+
+  const invRes = await query(
+    `SELECT name, price, quantity
+       FROM inventory_items
+      WHERE vendor_id = $1
+      ORDER BY created_at DESC
+      LIMIT 5`,
+    [vendor.id]
+  );
+  const inventory = invRes.rows || [];
+  const hasStock = inventory.length > 0;
+
+  if (hasStock) {
+    const stockList = inventory
+      .map(i => `• ${i.name} — ₦${Number(i.price / 100).toLocaleString()} (${i.quantity} left)`)
+      .join('\n');
+
+    await sendWithDelay(sock, senderJid,
+      `Hey! Your store *${vendor.business_name || vendor.store_code || 'your store'}* is already live ✅\n\n` +
+      `Here's a quick look at your latest products:\n${stockList}\n\n` +
+      `Reply *HELP* to see everything you can do with VendBot.`
+    );
+  } else {
+    await sendWithDelay(sock, senderJid,
+      `Hey! Your store *${vendor.business_name || vendor.store_code || 'your store'}* is live ✅\n\n` +
+      `But your inventory is empty — buyers can't order yet.\n\n` +
+      `Add your first product:\n` +
+      `Just send the name, price, and quantity.\n\n` +
+      `Example:\n` +
+      `_Black Sneakers, ₦45,000, 10 pairs_\n\n` +
+      `Or type *HELP* if you're stuck.`
+    );
+  }
+}
+
+async function handleResumeOnboarding(sock, senderJid, record) {
+  if (!record.vendor_id) {
+    await handleFreshOnboarding(sock, senderJid, record);
+    return;
+  }
+  const vendor = await getVendorById(record.vendor_id);
+  if (!vendor) {
+    await handleFreshOnboarding(sock, senderJid, record);
+    return;
+  }
+
+  await clearBuyerSessions(senderJid);
+
+  const step = vendor.onboarding_step || 'start';
+  console.log(`[ONBOARDING] Resuming vendor ${vendor.id} at step ${step}`);
+
+  let msg;
+  switch (step) {
+    case 'start':
+    case 'business_name':
+      msg =
+        `Welcome back 👋 Let's finish setting up *${vendor.business_name || 'your store'}*.\n\n` +
+        `What's your business name?`;
+      break;
+    case 'store_code':
+      msg =
+        `Welcome back 👋 Almost there.\n\n` +
+        `Remind me — *what's your store code?* (Short, memorable, all caps. E.g. AMAKA, SNEAKERHUB)`;
+      break;
+    case 'category':
+    case 'category_other':
+      msg =
+        `Welcome back 👋\n\n` +
+        `What do you sell? Pick the closest:\n` +
+        `1 — Fashion & clothing\n` +
+        `2 — Food & drinks\n` +
+        `3 — Electronics & gadgets\n` +
+        `4 — Beauty & skincare\n` +
+        `5 — Home & furniture\n` +
+        `6 — Other (tell me in one sentence)`;
+      break;
+    case 'location':
+      msg =
+        `Welcome back 👋\n\n` +
+        `Where are you based? Just the city or area — e.g. Lagos Island, Abuja, Kano.`;
+      break;
+    case 'delivery_coverage':
+      msg =
+        `Welcome back 👋\n\n` +
+        `*Do you deliver?*\n1 — Yes, anywhere in Nigeria\n2 — Only in my city\n3 — Pickup only\n4 — Depends on the order`;
+      break;
+    case 'turnaround':
+    case 'turnaround_other':
+      msg =
+        `Welcome back 👋\n\n` +
+        `How quickly do you typically deliver or prepare an order?\n` +
+        `1 — Same day\n2 — 1–2 days\n3 — 3–5 days\n4 — Made to order (tell me how long)`;
+      break;
+    case 'tone':
+      msg =
+        `Welcome back 👋\n\n` +
+        `How do you want your store assistant to sound?\n` +
+        `1 — Professional and formal\n2 — Friendly and conversational\n3 — Playful and fun\n4 — Mix of English and Pidgin`;
+      break;
+    case 'custom_note':
+      msg =
+        `Welcome back 👋\n\n` +
+        `Is there anything important you want buyers to know before they order?\n\n` +
+        `Reply with one short sentence or *SKIP*.`;
+      break;
+    case 'sheet_link':
+      msg =
+        `Welcome back 👋\n\n` +
+        `Paste your Google Sheet link here, or reply *SKIP* to add products via WhatsApp later.`;
+      break;
+    case 'negotiation':
+      msg =
+        `Welcome back 👋\n\n` +
+        `How should the bot handle price negotiation?\n\n` +
+        `1 — Fixed price (no negotiation)\n2 — Alert me when buyer asks to negotiate\n\n` +
+        `Reply 1 or 2.`;
+      break;
+    case 'bank_name':
+      msg =
+        `Welcome back 👋\n\n` +
+        `What *bank* do you use for receiving payments?\nExamples: GTBank, Access, Zenith, Opay, Palmpay, Kuda`;
+      break;
+    case 'account_number':
+    case 'confirm_account':
+    case 'agreement':
+      msg =
+        `Welcome back 👋\n\n` +
+        `Reply *VENDOR-SETUP* to continue from where you stopped in your onboarding.`;
+      break;
+    default:
+      msg =
+        `Welcome back 👋\n\n` +
+        `Reply *VENDOR-SETUP* to continue setting up your store with VendBot.`;
+  }
+
+  await sendWithDelay(sock, senderJid, msg);
+  await updateVendorState(vendor.id, 'onboarding_resume', {
+    current_step: step,
+    resumed_from: 'landing_page',
+  });
+}
+
+async function handleFreshOnboarding(sock, senderJid, record) {
+  const phone = canonicalBuyerJid(senderJid).replace('@s.whatsapp.net', '');
+  await clearBuyerSessions(senderJid);
+
+  const category = record && record.category ? record.category : null;
+
+  const insertRes = await query(
+    `INSERT INTO vendors (
+       whatsapp_number, category, onboarding_step, onboarding_complete, status, created_at
+     )
+     VALUES ($1, $2, 'start', false, 'onboarding', NOW())
+     ON CONFLICT (whatsapp_number) DO NOTHING
+     RETURNING *`,
+    [phone, category]
+  );
+
+  let vendor = insertRes.rows && insertRes.rows[0];
+  if (!vendor) {
+    const found = await query('SELECT * FROM vendors WHERE whatsapp_number = $1 LIMIT 1', [phone]);
+    vendor = found.rows && found.rows[0];
+  }
+
+  if (!vendor) {
+    await sendWithDelay(sock, senderJid,
+      `Hi! 👋 Welcome to VendBot.\n\nReply *VENDOR-SETUP* to start setting up your store.`
+    );
+    return;
+  }
+
+  const nameHint = record && record.name ? record.name : null;
+
+  if (nameHint) {
+    await sendWithDelay(sock, senderJid,
+      `Hi ${nameHint}! 👋 Welcome to VendBot.\n\n` +
+      `Let's get your store live. It takes about 5 minutes.\n\n` +
+      `What's your business name?`
+    );
+  } else {
+    await sendWithDelay(sock, senderJid,
+      `Hi! 👋 Welcome to VendBot.\n\n` +
+      `Let's get your store live in 5 minutes.\n\n` +
+      `What's your business name?`
+    );
+  }
+
+  await updateVendorState(vendor.id, 'awaiting_business_name', {
+    current_step: 'business_name',
+    resumed_from: 'landing_page',
+  });
+}
+
+module.exports = { handleOnboarding, getVendorCommandsMessage, handleLandingPageEntry };
