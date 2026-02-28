@@ -21,6 +21,7 @@ const {
 const { generatePaymentLink } = require('../../../payments/paystack');
 const { checkVendorCap } = require('../../../payments/paystack');
 const { decrementQty } = require('../../../inventory/manager');
+const { handleBalanceCommand, handlePendingCommand, handleHistoryCommand, detectVendorFinanceIntent } = require('../../../vendors/finance');
 const VENDBOT_NUMBER = process.env.VENDBOT_NUMBER || '';
 
 // Cooldown so we don't spam the same fallback every time (ms).
@@ -687,6 +688,40 @@ async function handleVendorMessage(sock, msg, vendor, text, vendorJid) {
       await sendWithDelay(sock, vendorJid, reply);
       logReply(reply);
     }
+    return;
+  }
+
+  // Finance: balance, pending orders, payout history
+  if (upper === 'BALANCE') {
+    await handleBalanceCommand(sock, vendorJid, vendor);
+    return;
+  }
+  if (upper === 'PENDING') {
+    await handlePendingCommand(sock, vendorJid, vendor);
+    return;
+  }
+  if (upper.startsWith('HISTORY ')) {
+    const month = upper.replace(/^HISTORY\s+/, '').trim();
+    await handleHistoryCommand(sock, vendorJid, vendor, month);
+    return;
+  }
+  if (upper === 'HISTORY') {
+    await handleHistoryCommand(sock, vendorJid, vendor);
+    return;
+  }
+
+  // Natural language finance: "how many orders pending", "how much have I made", "my balance", etc.
+  const financeIntent = detectVendorFinanceIntent(trimmed);
+  if (financeIntent === 'balance') {
+    await handleBalanceCommand(sock, vendorJid, vendor);
+    return;
+  }
+  if (financeIntent === 'pending') {
+    await handlePendingCommand(sock, vendorJid, vendor);
+    return;
+  }
+  if (financeIntent === 'history') {
+    await handleHistoryCommand(sock, vendorJid, vendor);
     return;
   }
 
