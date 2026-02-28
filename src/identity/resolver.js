@@ -5,6 +5,7 @@
  */
 
 const { getVendorByBotNumber, getVendorByStoreCode, getVendorByPhone } = require('../vendors/resolver');
+const { getSession } = require('../sessions/manager');
 
 const VENDOR_COMMANDS = [
   'ORDERS', 'BALANCE', 'DELIVERED', 'TAKEOVER', 'HANDBACK',
@@ -68,7 +69,18 @@ async function resolveIdentity(senderJid, text, botNum) {
   );
   const targetStore = storeVendor || null;
 
-  const context = resolveContext(senderVendor, hasStoreCode, upper, storeVendor, botNum);
+  // Session role can bias context when the sender explicitly chose vendor vs buyer (e.g. from ambiguous vendor prompt).
+  let sessionRole = null;
+  if (targetStore && targetStore.id) {
+    try {
+      const session = await getSession(senderJid, targetStore.id);
+      if (session && session.role) sessionRole = session.role;
+    } catch (_) {
+      // ignore session lookup errors; fall back to pure heuristic context
+    }
+  }
+
+  const context = resolveContext(senderVendor, hasStoreCode, upper, storeVendor, botNum, sessionRole);
 
   return {
     isVendor: !!senderVendor,
@@ -89,8 +101,18 @@ async function resolveIdentity(senderJid, text, botNum) {
  * @param {object|null} storeVendor - vendor that owns this bot
  * @param {string} botNum - digits of bot phone
  */
-function resolveContext(vendor, hasStoreCode, text, storeVendor, botNum) {
+function resolveContext(vendor, hasStoreCode, text, storeVendor, botNum, sessionRole) {
   const isStoreOwner = vendor && storeVendor && (vendor.whatsapp_number || '').replace(/\D/g, '') === botNum;
+
+  // Explicit mode from session: override default heuristics.
+  if (sessionRole === 'vendor' && isStoreOwner) {
+    return 'vendor_management';
+  }
+  if (sessionRole === 'buyer') {
+    if (hasStoreCode) return 'buyer';
+    if (storeVendor) return 'buyer';
+    // fall through when there's no clear store context
+  }
 
   // Vendor coming from landing or explicit setup keyword (e.g. "VENDOR-SETUP AMAKA-STORE")
   if (text === 'VENDOR-SETUP' || (text && text.trim() === 'VENDOR-SETUP') || text.startsWith('VENDOR-SETUP ')) {

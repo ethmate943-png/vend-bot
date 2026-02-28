@@ -27,6 +27,15 @@ function logMessage(vendor, buyerJid, text, intent) {
   console.log(`${COLORS.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${COLORS.reset}`);
 }
 
+function logSessionContext(vendorName, buyerJid, session) {
+  const phone = buyerJid.replace('@s.whatsapp.net', '');
+  const buyerName = session && session.buyer_name ? session.buyer_name : null;
+  const role = session && session.role ? session.role : 'unknown';
+  const state = session && session.intent_state ? session.intent_state : 'idle';
+  const time = new Date().toLocaleTimeString();
+  console.log(`${COLORS.dim}[SESSION] ${time} | Vendor=${vendorName || '-'} | Buyer=${noChatLogs ? '[redacted]' : phone}${buyerName && !noChatLogs ? ` (${buyerName})` : ''} | Role=${role} | State=${state}${COLORS.reset}`);
+}
+
 function logReply(text) {
   if (noChatLogs) {
     console.log(`  ${COLORS.bright}${COLORS.blue}💬 REPLY:${COLORS.reset} (content not logged)`);
@@ -36,4 +45,4 @@ function logReply(text) {
   console.log('');
 }
 
-module.exports = { COLORS, noChatLogs, logMessage, logReply };
+module.exports = { COLORS, noChatLogs, logMessage, logSessionContext, logReply };

@@ -7,7 +7,7 @@ const { resolveIdentity, setOnboardingSession } = require('../../identity/resolv
 const { getBuyerDisplayNameFromMessage, extractNameFromMessage, buildGreeting } = require('../../identity/buyer');
 const { getInventory } = require('../../inventory/manager');
 const { sendWithDelay } = require('../sender');
-const { logReply, logMessage } = require('./logger');
+const { logReply, logMessage, logSessionContext } = require('./logger');
 const { classifyIntent } = require('../../ai/classifier');
 const { shouldRespond } = require('../../ai/gatekeeper');
 const { handleAdminCommand } = require('./handlers/admin');
@@ -79,7 +79,9 @@ function extractText(msg) {
 }
 
 async function handleAmbiguousVendor(sock, jid, text, vendor) {
-  const upper = (text || '').toUpperCase().trim();
+  const trimmed = (text || '').trim();
+  const upper = trimmed.toUpperCase();
+  const lower = trimmed.toLowerCase();
   const isVendorSetup = upper.startsWith('VENDOR-SETUP');
 
   // For explicit vendor setup flows, never reuse a previous buyer session.
@@ -106,6 +108,38 @@ async function handleAmbiguousVendor(sock, jid, text, vendor) {
       return;
     }
   }
+
+  // Interpret direct replies to the prompt so we don't keep looping.
+  const pickedManage =
+    lower === '1' ||
+    /^manage\b/.test(lower) ||
+    /\bmy store\b/.test(lower) ||
+    /\bvendor\b/.test(lower);
+  const pickedShop =
+    lower === '2' ||
+    /\bshop\b/.test(lower) ||
+    /\bbuy\b/.test(lower);
+
+  if (pickedManage && vendor && vendor.id) {
+    await setSessionRole(jid, vendor.id, 'vendor');
+    await sendWithDelay(sock, jid,
+      `Got it — I'll treat this chat as *store management*.\n\n` +
+      `You can reply *HELP* to see all vendor commands, or send inventory updates like *add: name, price, qty*.`
+    );
+    logReply('[Ambiguous vendor — chose manage store]');
+    return;
+  }
+
+  if (pickedShop && vendor && vendor.id) {
+    await setSessionRole(jid, vendor.id, 'buyer');
+    await sendWithDelay(sock, jid,
+      `No wahala — I'll help you *shop* from this store.\n\n` +
+      `Tell me what you're looking for (e.g. "black sneakers 42", "air fryer", "rice and stew").`
+    );
+    logReply('[Ambiguous vendor — chose shop]');
+    return;
+  }
+
   const name = vendor.business_name || 'there';
   await sendWithDelay(sock, jid,
     `Hi ${name} 👋\n\nAre you managing your store or shopping?\n\n` +
@@ -293,6 +327,9 @@ async function handleBuyerMessage(sock, msg, buyerJid) {
     ...sessionRowResolved,
     conversation_history: getConversationHistory(sessionRowResolved)
   };
+  // Log high-level session context for debugging (vendor/buyer, role, state, buyer name).
+  const vendorLabel = vendor.business_name || vendor.store_code || 'Store';
+  logSessionContext(vendorLabel, buyerJid, session);
   const lowerText = text.toLowerCase().trim();
 
   // Capture buyer name from WhatsApp profile (pushName) or from conversation
